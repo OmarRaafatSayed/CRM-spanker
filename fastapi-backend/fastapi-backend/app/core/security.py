@@ -3,6 +3,12 @@ app/core/security.py
 ====================
 JWT authentication — supports both ES256 (Supabase JWKS) and HS256 fallback.
 
+TASK 6 Integration:
+- JWT token verification (ES256/HS256)
+- Unified AuthContext building
+- Role-based access control
+- Database profile resolution
+
 Supabase now issues ES256 tokens (P-256 elliptic curve).
 We fetch the public key from the JWKS endpoint and cache it in memory.
 HS256 with SUPABASE_JWT_SECRET is kept as a fallback for legacy tokens.
@@ -21,11 +27,14 @@ from jose import JWTError, jwt
 from jose.backends import ECKey
 from pydantic import BaseModel
 
+from app.core.auth_context import AuthContext, AuthContextBuilder
+
 # ── Config ────────────────────────────────────────────────────────────────────
 _SUPABASE_URL: str  = os.getenv("SUPABASE_URL", "").rstrip("/")
 _HS256_SECRET: str  = os.getenv("SUPABASE_JWT_SECRET",
                                  os.getenv("JWT_SECRET_KEY", ""))
 _bearer_scheme = HTTPBearer(auto_error=False)
+_auth_context_builder: AuthContextBuilder | None = None
 
 # ── JWKS cache ────────────────────────────────────────────────────────────────
 _jwks_cache: dict[str, Any] = {}   # kid → JWK dict
@@ -122,7 +131,13 @@ def require_auth(
         HTTPAuthorizationCredentials | None,
         Depends(_bearer_scheme),
     ],
-) -> TokenPayload:
+    supabase: Any = Depends(lambda: None),  # Will be injected by caller
+) -> AuthContext:
+    """
+    Authenticate and return unified AuthContext.
+    
+    TASK 6: Returns AuthContext with role + permissions instead of just TokenPayload.
+    """
     _401 = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Authentication required. Provide a valid Bearer token.",
@@ -139,15 +154,76 @@ def require_auth(
         raise _401
 
     sub = payload.get("sub")
+    email = payload.get("email", "")
+    token_role = payload.get("role", "customer")
+
     if not sub:
         raise _401
 
-    print(f"[auth] ✅ Authenticated user={sub[:8]}... role={payload.get('role','?')}")
-    return TokenPayload(
-        sub=sub,
-        email=payload.get("email", ""),
-        role=payload.get("role", ""),
-    )
+    # Build unified AuthContext
+    try:
+        from app.services.supabase_client import get_supabase
+        supabase = get_supabase()
+        
+        global _auth_context_builder
+        if _auth_context_builder is None:
+            _auth_context_builder = AuthContextBuilder(supabase)
+        
+        context = _auth_context_builder.build_from_token(sub, email, token_role)
+        print(f"[auth] ✅ Authenticated: {context}")
+        return context
+    except Exception as exc:
+        print(f"[auth] ⚠️  Failed to build auth context: {exc}")
+        # Fallback to basic context
+        return AuthContext(user_id=sub, email=email, role=token_role)
 
 
-AuthToken = TokenPayload
+def optional_auth(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None,
+        Depends(_bearer_scheme),
+    ],
+) -> AuthContext | None:
+    """Like require_auth but returns None instead of 401 when no token is provided."""
+    if credentials is None:
+        return None
+    try:
+        payload = _decode_token(credentials.credentials)
+        sub = payload.get("sub")
+        email = payload.get("email", "")
+        token_role = payload.get("role", "customer")
+
+        if not sub:
+            return None
+
+        # Build unified AuthContext
+        try:
+            from app.services.supabase_client import get_supabase
+            supabase = get_supabase()
+            
+            global _auth_context_builder
+            if _auth_context_builder is None:
+                _auth_context_builder = AuthContextBuilder(supabase)
+            
+            return _auth_context_builder.build_from_token(sub, email, token_role)
+        except Exception:
+            # Fallback to basic context
+            return AuthContext(user_id=sub, email=email, role=token_role)
+
+    except JWTError:
+        return None
+
+
+# Keep legacy types for backward compatibility
+class TokenPayload(BaseModel):
+    """Legacy token payload — use AuthContext instead"""
+    sub:   str
+    email: str = ""
+    role:  str = ""
+
+    @property
+    def user_id(self) -> str:
+        return self.sub
+
+
+AuthToken = AuthContext

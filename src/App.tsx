@@ -27,10 +27,14 @@ import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
 import { Label } from './components/ui/label'
 import { Toaster } from './components/ui/toaster'
+import { LuxuryStatCard } from './components/ui/LuxuryStatCard'
+import { LuxuryCard } from './components/ui/LuxuryCard'
+import { LuxuryBadge } from './components/ui/LuxuryBadge'
 import { FlightSearch } from './components/FlightSearch'
 import { HotelManagement } from './components/HotelManagement-simple'
 import { VisaManagement } from './components/VisaManagement-simple'
 import { ManualPaymentLedger } from './components/ManualPaymentLedger-simple'
+import { CRMCustomers } from './components/CRMCustomers'
 import { DesktopSidebar, MobileTabBar, MobileDrawer, NAV_IDS } from './components/Sidebar'
 import { LangToggle } from './components/LangToggle'
 import {
@@ -140,8 +144,13 @@ function App() {
         return
       }
 
-      // Signup may return null session if Supabase email confirmation is enabled.
-      // In that case, tell the user to check their email instead of crashing.
+      // Signup with email confirmation required — show info message, don't crash
+      if (!isLogin && data.email_confirmation_required) {
+        setAuthError(data.message ?? t('auth.checkEmail'))
+        return
+      }
+
+      // Session missing for another reason
       if (!data.session?.access_token) {
         setAuthError(isLogin ? t('auth.authFailed') : t('auth.checkEmail'))
         return
@@ -356,16 +365,16 @@ function App() {
         />
 
         {/* Main area */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden bg-gradient-to-b from-[var(--color-bg-primary)] to-white">
 
-          {/* Top bar */}
-          <header className="bg-white border-b h-14 md:h-16 flex items-center px-4 md:px-6 shrink-0 shadow-sm gap-3">
+          {/* Top bar with Luxury Styling */}
+          <header className="bg-white border-b border-[var(--color-border-luxury)] h-14 md:h-16 flex items-center px-4 md:px-6 shrink-0 shadow-sm gap-3">
             <div className="flex-1 min-w-0">
-              <h1 className="text-base md:text-lg font-semibold text-gray-900 truncate">{pageTitle}</h1>
-              <p className="text-xs text-gray-400 hidden sm:block">{t('app.tagline')}</p>
+              <h1 className="text-base md:text-lg font-semibold text-[var(--color-text-primary)] truncate">{pageTitle}</h1>
+              <p className="text-xs text-[var(--color-text-muted)] hidden sm:block">{t('app.tagline')}</p>
             </div>
             <LangToggle />
-            <div className="flex items-center gap-2 text-sm text-gray-500 shrink-0">
+            <div className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] shrink-0">
               <Users className="h-4 w-4" />
               <span className="hidden sm:inline truncate max-w-[160px]">{displayEmail}</span>
             </div>
@@ -377,32 +386,74 @@ function App() {
             {activeTab === 'dashboard' && (
               <div className="space-y-5 max-w-5xl mx-auto">
                 <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4">
-                  {(Object.entries(DASH_ICONS) as [string, { icon: any; color: string }][]).map(
-                    ([tab, { icon: Icon, color }]) => (
-                      <button
-                        key={tab}
-                        onClick={() => setActiveTab(tab)}
-                        className="flex items-center gap-3 bg-white rounded-xl p-4 shadow-sm hover:shadow-md active:scale-95 transition-all text-start"
-                      >
-                        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${color} text-white`}>
-                          <Icon className="h-5 w-5" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-xs text-gray-400">{t('dashboard.open')}</p>
-                          <p className="font-semibold text-gray-900 text-sm truncate">{t(`nav.${tab}`)}</p>
-                        </div>
-                        <ChevronRight className="h-4 w-4 text-gray-300 ms-auto shrink-0 rtl:rotate-180" />
-                      </button>
-                    ),
-                  )}
+                  <LuxuryStatCard
+                    label={t('dashboard.visits')}
+                    value="4,821"
+                    subtext={t('dashboard.thisMonth')}
+                    icon="👁️"
+                    badgeColor="blue"
+                    variant="premium"
+                  />
+                  <LuxuryStatCard
+                    label={t('dashboard.pendingLeads')}
+                    value="13"
+                    subtext={t('dashboard.awaitingCRM')}
+                    icon="⏳"
+                    badgeColor="cyan"
+                    variant="premium"
+                  />
+                  <LuxuryStatCard
+                    label={t('dashboard.activePackages')}
+                    value="8"
+                    subtext={t('dashboard.onWebsite')}
+                    icon="📦"
+                    badgeColor="emerald"
+                    variant="premium"
+                  />
+                  <LuxuryStatCard
+                    label={t('dashboard.completed')}
+                    value="142"
+                    subtext={t('dashboard.allTime')}
+                    icon="✅"
+                    badgeColor="gold"
+                    variant="premium"
+                  />
                 </div>
-                <div className="bg-white rounded-xl p-5 shadow-sm">
-                  <h2 className="font-semibold text-gray-900 mb-1">{t('dashboard.welcome')}</h2>
-                  <p className="text-sm text-gray-500">{t('dashboard.welcomeDesc')}</p>
+
+                <LuxuryCard variant="glass" className="p-6">
+                  <h2 className="text-luxury-heading text-lg mb-1">{t('dashboard.welcome')}</h2>
+                  <p className="text-luxury-body mb-4">{t('dashboard.welcomeDesc')}</p>
+                  <div className="flex gap-2">
+                    <LuxuryBadge label="متصل" variant="approved" style="gradient" icon="🟢" />
+                    <LuxuryBadge label="نظام جاهز" variant="info" style="gradient" icon="⚙️" />
+                  </div>
+                </LuxuryCard>
+
+                <div>
+                  <h2 className="text-luxury-heading text-base mb-3">{t('dashboard.quickActions')}</h2>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {[
+                      { href: '#', label: t('dashboard.addPackage'), icon: '📦', color: 'emerald' },
+                      { href: '#', label: t('dashboard.addBanner'), icon: '🖼️', color: 'blue' },
+                      { href: '#', label: t('dashboard.reviewLeads'), icon: '👥', color: 'gold' },
+                      { href: '#', label: t('dashboard.systemLogs'), icon: '📋', color: 'purple' },
+                    ].map(item => (
+                      <LuxuryCard
+                        key={item.href}
+                        variant="default"
+                        className="flex flex-col items-center gap-2 text-center !p-4"
+                        onClick={() => console.log(item.label)}
+                      >
+                        <span className="text-2xl">{item.icon}</span>
+                        <span className="text-sm font-medium text-[var(--color-text-primary)]">{item.label}</span>
+                      </LuxuryCard>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
 
+            {activeTab === 'customers' && <CRMCustomers />}
             {activeTab === 'flights'  && <FlightSearch />}
             {activeTab === 'hotels'   && <HotelManagement />}
             {activeTab === 'visa'     && <VisaManagement />}

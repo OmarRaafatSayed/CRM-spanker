@@ -61,9 +61,18 @@ class BrightDataFlightScraper:
         """
         Search for flights.
 
-        Tries the cache first, then Network Interception, then
-        Bright Data if configured and interception yields nothing.
+        If USE_MOCK_FLIGHT_DATA=true, returns deterministic mock data immediately
+        (no browser launch, no network call, no Supabase cache).
+
+        Otherwise tries: cache → Network Interception → Bright Data.
         """
+        # ── Mock mode ────────────────────────────────────────────────────────
+        if os.getenv("USE_MOCK_FLIGHT_DATA", "false").lower() == "true":
+            logger.info(f"[MOCK] Returning mock flights for {origin}→{destination}")
+            return self._build_mock_result(
+                origin, destination, departure_date, return_date,
+                passenger_count, travel_class
+            )
         # 1. Cache check
         try:
             from app.services.flight_cache import get_cached_results
@@ -76,45 +85,43 @@ class BrightDataFlightScraper:
         except Exception as e:
             logger.warning(f"Cache check failed (non-fatal): {e}")
 
-        # 2. Primary: Network Interception Engine
-        logger.info(f"[PRIMARY] Network Interception: {origin} → {destination}")
+        # 2. Primary: Ultra-lightweight HTTP scraper
+        logger.info(f"[PRIMARY] Lightweight HTTP scraper: {origin} → {destination}")
         try:
-            from app.services.flight_interceptor import intercept_google_flights
-
-            print(f"DEBUG: Starting intercept_google_flights for {origin}→{destination}")
-            result = await intercept_google_flights(
+            from app.services.fast_flight_scraper import get_live_flights
+            
+            flights = await get_live_flights(
                 origin=origin,
                 destination=destination,
-                departure_date=departure_date,
+                date=departure_date,
                 return_date=return_date,
                 passenger_count=passenger_count,
                 travel_class=travel_class,
-                max_retries=3,
             )
 
-            if result.get("success") and result.get("flights"):
-                logger.info(
-                    f"[PRIMARY] ✅ Interception succeeded: "
-                    f"{result['total_results']} flights"
-                )
-                await self._try_cache(
-                    origin, destination, departure_date, return_date, result
-                )
+            if flights:
+                result = {
+                    "success": True,
+                    "provider": "lightweight_http",
+                    "origin": origin,
+                    "destination": destination,
+                    "departure_date": departure_date,
+                    "return_date": return_date,
+                    "flights": flights,
+                    "total_results": len(flights),
+                    "cached": False,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+                
+                logger.info(f"[PRIMARY] ✅ Lightweight scraper succeeded: {len(flights)} flights")
+                await self._try_cache(origin, destination, departure_date, return_date, result)
                 return result
             else:
-                logger.warning(
-                    f"[PRIMARY] Interception returned no flights: "
-                    f"{result.get('error', 'empty result')}"
-                )
+                logger.warning("[PRIMARY] Lightweight scraper returned no results")
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(
-                f"[PRIMARY] Network Interception failed for "
-                f"{origin}->{destination} on {departure_date}: {error_msg}"
-            )
-            # Do NOT return fake data. Fall through to Bright Data or
-            # the exhausted-methods response below.
+            logger.error(f"[PRIMARY] Lightweight scraper failed for {origin}->{destination} on {departure_date}: {error_msg}")
 
         # 3. Secondary: Bright Data (only if configured)
         # Reached here because interception returned no flights or raised.
@@ -136,7 +143,7 @@ class BrightDataFlightScraper:
                     f"{origin}->{destination}: {e}"
                 )
 
-        # 4. All methods exhausted
+        # All methods exhausted - return with helpful error
         return {
             "success": False,
             "provider": "all_methods_failed",
@@ -148,10 +155,9 @@ class BrightDataFlightScraper:
             "total_results": 0,
             "cached": False,
             "error": (
-                "All flight search methods exhausted. "
-                "The interceptor requires a local Chromium install "
-                "(run: playwright install chromium). "
-                "Alternatively configure Bright Data credentials."
+                "Live flight search completed but no results found. This is typically due to "
+                "Google Flights bot detection. In production, consider using a dedicated flight API "
+                "like Amadeus, Skyscanner, or Kiwi.com for reliable data."
             ),
             "error_type": "all_methods_failed",
             "timestamp": datetime.utcnow().isoformat(),
@@ -358,6 +364,78 @@ class BrightDataFlightScraper:
                 result["brightdata_status"] = f"error: {e}"
 
         return result
+
+    # ──────────────────────────────────────────
+    #  Mock data builder
+    # ──────────────────────────────────────────
+
+    def _build_mock_result(
+        self,
+        origin: str,
+        destination: str,
+        departure_date: str,
+        return_date: Optional[str],
+        passenger_count: int,
+        travel_class: str,
+    ) -> Dict[str, Any]:
+        """Return realistic-looking mock flights for dev/testing."""
+        base_prices = {
+            "economy": 1200, "premium_economy": 2400,
+            "business": 4800, "first": 9600,
+        }
+        base = base_prices.get(travel_class, 1200)
+
+        mock_flights = [
+            {
+                "flight_id":      f"MOCK-{origin}{destination}-001",
+                "airline":        "EgyptAir",
+                "flight_number":  "MS 701",
+                "departure_time": f"{departure_date}T08:00:00",
+                "arrival_time":   f"{departure_date}T11:30:00",
+                "duration":       "3h 30m",
+                "price":          base,
+                "price_currency": "EGP",
+                "stops":          0,
+                "raw_text":       f"EgyptAir {origin}→{destination} direct",
+            },
+            {
+                "flight_id":      f"MOCK-{origin}{destination}-002",
+                "airline":        "Nile Air",
+                "flight_number":  "NP 100",
+                "departure_time": f"{departure_date}T14:00:00",
+                "arrival_time":   f"{departure_date}T19:00:00",
+                "duration":       "5h 00m",
+                "price":          int(base * 0.85),
+                "price_currency": "EGP",
+                "stops":          1,
+                "raw_text":       f"Nile Air {origin}→{destination} 1 stop",
+            },
+            {
+                "flight_id":      f"MOCK-{origin}{destination}-003",
+                "airline":        "Air Arabia",
+                "flight_number":  "G9 501",
+                "departure_time": f"{departure_date}T22:00:00",
+                "arrival_time":   f"{departure_date}T23:45:00",
+                "duration":       "1h 45m",
+                "price":          int(base * 1.20),
+                "price_currency": "EGP",
+                "stops":          0,
+                "raw_text":       f"Air Arabia {origin}→{destination} direct",
+            },
+        ]
+
+        return {
+            "success":        True,
+            "provider":       "mock_data",
+            "origin":         origin,
+            "destination":    destination,
+            "departure_date": departure_date,
+            "return_date":    return_date,
+            "flights":        mock_flights,
+            "total_results":  len(mock_flights),
+            "cached":         False,
+            "timestamp":      datetime.utcnow().isoformat(),
+        }
 
     # ──────────────────────────────────────────
     #  Internal helpers

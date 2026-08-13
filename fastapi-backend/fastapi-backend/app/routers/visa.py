@@ -132,21 +132,48 @@ class StatusUpdateResponse(BaseModel):
 
 # ─── Internal helpers ─────────────────────────────────────────────────────────
 
-def _resolve_profile_id(supabase: Any, auth_user_id: str) -> Optional[str]:
-    """Look up the profiles.id (PK) for the given auth user UUID."""
+def _get_profile_id(supabase: Any, auth_user_id: str) -> Optional[str]:
+    """Get profile ID for user. Returns None if not found."""
     try:
-        resp = (
-            supabase.table(_PROFILES_TABLE)
-            .select("id")
-            .eq("user_id", auth_user_id)
-            .limit(1)
-            .execute()
-        )
-        if resp.data:
-            return str(resp.data[0]["id"])
+        resp = supabase.table(_PROFILES_TABLE).select("id").eq("user_id", auth_user_id).limit(1).execute()
+        return str(resp.data[0]["id"]) if resp.data else None
     except Exception as exc:
-        logger.warning(f"Profile lookup failed for user {auth_user_id}: {exc}")
-    return None
+        logger.warning(f"Profile lookup failed for {auth_user_id}: {exc}")
+        return None
+
+
+def _build_visa_record(application: VisaApplicationCreate, profile_id: Optional[str]) -> Dict[str, Any]:
+    """Transform VisaApplicationCreate to database record."""
+    data = application.model_dump(exclude_none=False)
+    data["created_by"] = profile_id
+    for col in ("id", "created_at", "updated_at"):
+        data.pop(col, None)
+    return data
+
+
+def _enrich_status_name(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Add status_name to result."""
+    result["status_name"] = _STATUS_NAMES.get(result["status"])
+    return result
+
+
+def _apply_visa_filters(
+    query: Any,
+    client_name: Optional[str],
+    passport_number: Optional[str],
+    destination_country: Optional[str],
+    status: Optional[int],
+) -> Any:
+    """Apply filters to visa search query."""
+    if client_name:
+        query = query.ilike("client_name", f"%{client_name}%")
+    if passport_number:
+        query = query.eq("passport_number", passport_number)
+    if destination_country:
+        query = query.ilike("destination_country", f"%{destination_country}%")
+    if status is not None:
+        query = query.eq("status", status)
+    return query
 
 
 def _classify_db_error(exc: Exception, context: str) -> HTTPException:
@@ -192,25 +219,12 @@ async def create_visa_application(
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
 ) -> VisaApplicationResponse:
-    """
-    Create a new visa application.
-    
-    **Requires:** ``Authorization: Bearer <supabase_access_token>``
-    
-    Default status is 1 (Documents Collected).
-    """
-    profile_id = _resolve_profile_id(supabase, token.user_id)
+    """Create a new visa application."""
+    profile_id = _get_profile_id(supabase, token.user_id)
     if not profile_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No profile found for this account.",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No profile found.")
 
-    data = application.model_dump(exclude_none=False)
-    data["created_by"] = profile_id
-    # Remove fields managed by DB
-    for col in ("id", "created_at", "updated_at"):
-        data.pop(col, None)
+    data = _build_visa_record(application, profile_id)
 
     try:
         response = supabase.table(_TABLE).insert(data).execute()
@@ -222,13 +236,8 @@ async def create_visa_application(
                 detail="Failed to create visa application.",
             )
         
-        # Add status name
-        inserted["status_name"] = _STATUS_NAMES.get(inserted["status"])
-        
-        logger.info(
-            f"[visa] Created application {inserted['id']} for "
-            f"{application.client_name} by user={token.user_id}"
-        )
+        inserted = _enrich_status_name(inserted)
+        logger.info(f"[visa] Created {inserted['id']} by {token.user_id}")
         
         return VisaApplicationResponse(**inserted)
         
@@ -244,68 +253,39 @@ async def create_visa_application(
 async def search_visa_applications(
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
-    # Filters
-    client_name: Optional[str] = Query(None, description="Filter by client name (partial match)"),
-    passport_number: Optional[str] = Query(None, description="Filter by passport number (exact match)"),
-    destination_country: Optional[str] = Query(None, description="Filter by destination country (partial match)"),
-    status: Optional[int] = Query(None, ge=1, le=7, description="Filter by status (1-7)"),
-    # Pagination
-    limit: int = Query(50, ge=1, le=200, description="Max records to return"),
-    offset: int = Query(0, ge=0, description="Pagination offset"),
+    client_name: Optional[str] = Query(None),
+    passport_number: Optional[str] = Query(None),
+    destination_country: Optional[str] = Query(None),
+    status: Optional[int] = Query(None, ge=1, le=7),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ) -> SearchResponse:
-    """
-    Search visa applications belonging to the authenticated user.
-    
-    **Requires:** ``Authorization: Bearer <supabase_access_token>``
-    """
-    profile_id = _resolve_profile_id(supabase, token.user_id)
+    """Search visa applications with filters."""
+    profile_id = _get_profile_id(supabase, token.user_id)
 
     try:
         query = supabase.table(_TABLE).select("*", count="exact")
 
-        # Ownership filter
         if profile_id:
             query = query.eq("created_by", profile_id)
         else:
-            logger.warning(
-                f"Profile not found for auth user {token.user_id}; "
-                "returning empty search results."
-            )
-            return SearchResponse(
-                results=[],
-                count=0,
-                filters_applied={"warning": "No profile found for this user."},
-            )
+            logger.warning(f"No profile for {token.user_id}")
+            return SearchResponse(results=[], count=0, filters_applied={"warning": "No profile found"})
 
-        # Optional filters
-        if client_name:
-            query = query.ilike("client_name", f"%{client_name}%")
-        if passport_number:
-            query = query.eq("passport_number", passport_number)
-        if destination_country:
-            query = query.ilike("destination_country", f"%{destination_country}%")
-        if status is not None:
-            query = query.eq("status", status)
+        # Apply filters
+        query = _apply_visa_filters(query, client_name, passport_number, destination_country, status)
 
-        # Ordering & pagination
-        query = (
-            query
-            .order("created_at", desc=True)
-            .range(offset, offset + limit - 1)
-        )
+        # Pagination
+        query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
 
         response = query.execute()
-        results: List[Dict[str, Any]] = response.data or []
-        total_count: int = response.count if response.count is not None else len(results)
+        results = response.data or []
+        total_count = response.count if response.count is not None else len(results)
 
-        # Add status names to results
-        for result in results:
-            result["status_name"] = _STATUS_NAMES.get(result["status"])
+        # Add status names
+        results = [_enrich_status_name(r) for r in results]
 
-        logger.info(
-            f"[visa] search: {len(results)} results (total={total_count}) "
-            f"for user={token.user_id}"
-        )
+        logger.info(f"[visa] search: {len(results)} results for {token.user_id}")
 
         return SearchResponse(
             results=results,
@@ -334,17 +314,10 @@ async def get_visa_application(
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
 ) -> VisaApplicationResponse:
-    """
-    Get a single visa application by ID.
-    
-    **Requires:** ``Authorization: Bearer <supabase_access_token>``
-    """
-    profile_id = _resolve_profile_id(supabase, token.user_id)
+    """Get a single visa application by ID."""
+    profile_id = _get_profile_id(supabase, token.user_id)
     if not profile_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No profile found for this account.",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No profile found.")
 
     try:
         response = (
@@ -357,14 +330,9 @@ async def get_visa_application(
         )
         
         if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Visa application {application_id} not found.",
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
         
-        result = response.data[0]
-        result["status_name"] = _STATUS_NAMES.get(result["status"])
-        
+        result = _enrich_status_name(response.data[0])
         return VisaApplicationResponse(**result)
         
     except HTTPException:
@@ -382,24 +350,14 @@ async def update_visa_application(
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
 ) -> VisaApplicationResponse:
-    """
-    Update a visa application (partial update).
-    
-    **Requires:** ``Authorization: Bearer <supabase_access_token>``
-    """
-    profile_id = _resolve_profile_id(supabase, token.user_id)
+    """Update a visa application (partial update)."""
+    profile_id = _get_profile_id(supabase, token.user_id)
     if not profile_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No profile found for this account.",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No profile found.")
 
     data = updates.model_dump(exclude_none=True)
     if not data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No fields provided to update.",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update.")
 
     try:
         response = (
@@ -412,15 +370,10 @@ async def update_visa_application(
         
         updated = response.data or []
         if not updated:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Visa application {application_id} not found or not owned by this account.",
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
         
-        result = updated[0]
-        result["status_name"] = _STATUS_NAMES.get(result["status"])
-        
-        logger.info(f"[visa] Updated application {application_id} by user={token.user_id}")
+        result = _enrich_status_name(updated[0])
+        logger.info(f"[visa] Updated {application_id} by {token.user_id}")
         
         return VisaApplicationResponse(**result)
         
@@ -435,29 +388,17 @@ async def update_visa_application(
 @router.patch("/applications/{application_id}/status", response_model=StatusUpdateResponse)
 async def update_visa_status(
     application_id: str,
-    new_status: int = Query(..., ge=1, le=7, description="New status (1-7)"),
+    new_status: int = Query(..., ge=1, le=7),
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
 ) -> StatusUpdateResponse:
-    """
-    Update only the status of a visa application.
-    
-    **Requires:** ``Authorization: Bearer <supabase_access_token>``
-    
-    This is a convenience endpoint for the status tracking workflow.
-    """
-    profile_id = _resolve_profile_id(supabase, token.user_id)
+    """Update only the status of a visa application."""
+    profile_id = _get_profile_id(supabase, token.user_id)
     if not profile_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No profile found for this account.",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No profile found.")
 
     if new_status not in _VALID_STATUSES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid status {new_status}. Must be between 1 and 7.",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status.")
 
     try:
         response = (
@@ -470,15 +411,9 @@ async def update_visa_status(
         
         updated = response.data or []
         if not updated:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Visa application {application_id} not found or not owned by this account.",
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
         
-        logger.info(
-            f"[visa] Updated status of {application_id} to {new_status} "
-            f"by user={token.user_id}"
-        )
+        logger.info(f"[visa] Status updated {application_id} to {new_status} by {token.user_id}")
         
         return StatusUpdateResponse(
             success=True,
@@ -499,22 +434,15 @@ async def update_visa_status(
 @router.patch("/applications/{application_id}/appointment")
 async def update_appointment_date(
     application_id: str,
-    appointment_date: str = Query(..., description="Appointment date (YYYY-MM-DD)"),
-    appointment_notes: Optional[str] = Query(None, description="Optional notes"),
+    appointment_date: str = Query(...),
+    appointment_notes: Optional[str] = Query(None),
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
 ) -> Dict[str, Any]:
-    """
-    Update the embassy appointment date for a visa application.
-    
-    **Requires:** ``Authorization: Bearer <supabase_access_token>``
-    """
-    profile_id = _resolve_profile_id(supabase, token.user_id)
+    """Update the embassy appointment date for a visa application."""
+    profile_id = _get_profile_id(supabase, token.user_id)
     if not profile_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No profile found for this account.",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No profile found.")
 
     data = {"appointment_date": appointment_date}
     if appointment_notes:
@@ -531,15 +459,9 @@ async def update_appointment_date(
         
         updated = response.data or []
         if not updated:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Visa application {application_id} not found or not owned by this account.",
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
         
-        logger.info(
-            f"[visa] Updated appointment date of {application_id} to {appointment_date} "
-            f"by user={token.user_id}"
-        )
+        logger.info(f"[visa] Updated appointment for {application_id} by {token.user_id}")
         
         return {
             "success": True,
@@ -562,19 +484,10 @@ async def delete_visa_application(
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
 ) -> Dict[str, Any]:
-    """
-    Delete a visa application.
-    
-    **Requires:** ``Authorization: Bearer <supabase_access_token>``
-    
-    Only the owner can delete an application.
-    """
-    profile_id = _resolve_profile_id(supabase, token.user_id)
+    """Delete a visa application."""
+    profile_id = _get_profile_id(supabase, token.user_id)
     if not profile_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No profile found for this account.",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No profile found.")
 
     try:
         response = (
@@ -587,12 +500,9 @@ async def delete_visa_application(
         
         deleted = response.data or []
         if not deleted:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Visa application {application_id} not found or not owned by this account.",
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
         
-        logger.info(f"[visa] Deleted application {application_id} by user={token.user_id}")
+        logger.info(f"[visa] Deleted {application_id} by {token.user_id}")
         
         return {"success": True, "deleted_id": application_id}
         
@@ -609,14 +519,8 @@ async def get_status_summary(
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
 ) -> Dict[str, Any]:
-    """
-    Get a count of applications by status for the authenticated user.
-    
-    **Requires:** ``Authorization: Bearer <supabase_access_token>``
-    
-    Returns counts for each status (1-7).
-    """
-    profile_id = _resolve_profile_id(supabase, token.user_id)
+    """Get count of applications by status for authenticated user."""
+    profile_id = _get_profile_id(supabase, token.user_id)
 
     try:
         response = (
@@ -635,10 +539,7 @@ async def get_status_summary(
         
         return {
             "total": len(applications),
-            "by_status": {
-                _STATUS_NAMES[status]: count
-                for status, count in status_counts.items()
-            },
+            "by_status": {_STATUS_NAMES[status]: count for status, count in status_counts.items()},
             "status_counts": status_counts,
         }
         

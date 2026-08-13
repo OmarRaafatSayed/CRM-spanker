@@ -33,6 +33,7 @@ services:
       # Flight Scraping Configuration
       - FLIGHT_CACHE_TTL_HOURS=12
       - USE_REMOTE_BROWSER=true
+      - USE_MOCK_FLIGHT_DATA=${USE_MOCK_FLIGHT_DATA:-false}
       
       # Bright Data Cloud Browser Credentials
       - BRIGHTDATA_CUSTOMER_ID=${BRIGHTDATA_CUSTOMER_ID}

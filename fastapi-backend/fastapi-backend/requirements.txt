@@ -25,8 +25,9 @@ xlrd==2.0.1
 httpx>=0.25.0
 aiofiles==24.1.0
 
-# Scraping
-playwright==1.40.0
+# Scraping - lightweight HTTP client
+httpx>=0.25.0
+requests>=2.31.0
 
 # Environment & Utilities
 python-dotenv==1.0.1

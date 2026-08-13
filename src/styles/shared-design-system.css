@@ -1,0 +1,290 @@
+/**
+ * Shared Design System — Luxury Brand Colors, Typography, Glassmorphism
+ * ======================================================================
+ * 
+ * Single source of truth for design tokens across Portal + CRM Module.
+ * Ensures brand consistency: emerald green, premium gold, sophisticated backgrounds.
+ */
+
+@layer base {
+  :root {
+    /* ─────────────────────────────────────────────────────────────
+       PRIMARY COLOR: Emerald Green (Luxury Brand Identity)
+       ───────────────────────────────────────────────────────────── */
+    --color-brand-green: #1b4332;           /* Main brand green */
+    --color-brand-green-dark: #081c15;      /* Deep, sophisticated */
+    --color-brand-green-light: #2d6a4f;     /* Lifted highlight */
+    --color-brand-green-lighter: #52b788;   /* Soft, premium */
+
+    /* ─────────────────────────────────────────────────────────────
+       SECONDARY COLOR: Premium Gold (Refined Accent)
+       ───────────────────────────────────────────────────────────── */
+    --color-brand-gold: #d4af37;            /* Rich gold */
+    --color-brand-gold-dark: #b8941f;       /* Deep gold */
+    --color-brand-gold-light: #f4d03f;      /* Bright accent */
+
+    /* ─────────────────────────────────────────────────────────────
+       BACKGROUNDS: Deep & Warm
+       ───────────────────────────────────────────────────────────── */
+    --color-bg-primary: #f8f6f1;            /* Warm cream (primary) */
+    --color-bg-alt: #f2ede6;                /* Slightly warmer alt */
+    --color-bg-dark: #0f172a;               /* Deep navy (dark mode) */
+    --color-bg-navy: #1e293b;               /* Navy blue */
+    --color-bg-charcoal: #334155;           /* Medium charcoal */
+
+    /* ─────────────────────────────────────────────────────────────
+       TEXT HIERARCHY: Readable, Elegant
+       ───────────────────────────────────────────────────────────── */
+    --color-text-primary: #0f172a;          /* Deep navy (main text) */
+    --color-text-secondary: #475569;        /* Gray blue (secondary) */
+    --color-text-muted: #64748b;            /* Lighter gray (muted) */
+    --color-text-luxury: #1e293b;           /* Luxury dark text */
+
+    /* ─────────────────────────────────────────────────────────────
+       BORDERS & DIVIDERS: Subtle, Refined
+       ───────────────────────────────────────────────────────────── */
+    --color-border-light: #e2e8f0;          /* Light border */
+    --color-border-luxury: #cbd5e1;         /* Premium border */
+
+    /* ─────────────────────────────────────────────────────────────
+       GLASSMORPHISM: Transparent, Blurred Effects
+       ───────────────────────────────────────────────────────────── */
+    --glass-bg: rgba(255, 255, 255, 0.75);  /* Main glass background */
+    --glass-bg-dark: rgba(248, 246, 241, 0.7); /* Dark mode glass */
+    --glass-border: rgba(255, 255, 255, 0.3);  /* Glass border */
+    --glass-border-dark: rgba(216, 208, 195, 0.4); /* Dark glass border */
+    --glass-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.07);
+    --glass-shadow-large: 0 25px 50px -20px rgba(0, 0, 0, 0.1);
+    --glass-blur: blur(16px);
+    --glass-blur-panel: blur(20px);
+
+    /* ─────────────────────────────────────────────────────────────
+       GRADIENTS: Premium, Atmospheric
+       ───────────────────────────────────────────────────────────── */
+    --gradient-luxury: linear-gradient(135deg, #1b4332 0%, #2d6a4f 50%, #52b788 100%);
+    --gradient-warm: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    --gradient-mesh: radial-gradient(ellipse at top, #f1f5f9, transparent);
+    --gradient-gold: linear-gradient(135deg, #d4af37 0%, #f4d03f 100%);
+    --gradient-emerald: linear-gradient(135deg, #1b4332 0%, #52b788 100%);
+
+    /* ─────────────────────────────────────────────────────────────
+       SHADOWS: Elevation & Depth
+       ───────────────────────────────────────────────────────────── */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+    --shadow-lg: 0 10px 20px rgba(0, 0, 0, 0.1);
+    --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.12);
+    --shadow-luxury: 0 25px 50px -20px rgba(0, 0, 0, 0.1);
+    --shadow-luxury-hover: 0 30px 60px -20px rgba(0, 0, 0, 0.12);
+    --shadow-glow: 0 0 20px rgba(27, 67, 50, 0.3);
+    --shadow-glow-strong: 0 0 30px rgba(27, 67, 50, 0.5);
+
+    /* ─────────────────────────────────────────────────────────────
+       TRANSITION TIMINGS: Smooth, Luxury Feel
+       ───────────────────────────────────────────────────────────── */
+    --duration-fast: 150ms;
+    --duration-normal: 300ms;
+    --duration-slow: 500ms;
+    --duration-slower: 700ms;
+    --easing-luxury: cubic-bezier(0.4, 0, 0.2, 1);
+    --easing-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   TAILWIND LAYER: Custom Utilities for Luxury Effects
+   ───────────────────────────────────────────────────────────────────── */
+
+@layer components {
+  /* ─── Glass Morphism ─── */
+  .glass-card {
+    @apply bg-white/75 backdrop-blur-[16px] border border-white/30;
+    box-shadow: var(--glass-shadow);
+  }
+
+  .glass-panel {
+    @apply bg-white/90 backdrop-blur-[20px] border border-white/40;
+    box-shadow: var(--glass-shadow-large);
+  }
+
+  .glass-dark {
+    @apply bg-white/60 backdrop-blur-[20px] border border-white/40;
+    box-shadow: var(--glass-shadow-large);
+  }
+
+  /* ─── Luxury Cards ─── */
+  .card-luxury {
+    @apply bg-white rounded-xl border border-[var(--color-border-luxury)];
+    box-shadow: var(--shadow-luxury);
+    transition: all var(--duration-normal) var(--easing-luxury);
+  }
+
+  .card-luxury:hover {
+    box-shadow: var(--shadow-luxury-hover);
+    transform: translateY(-4px) scale(1.01);
+  }
+
+  /* ─── Luxury Backgrounds with Dot Pattern ─── */
+  .bg-luxury-pattern {
+    @apply bg-[url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="1.5" fill="rgba(27,67,50,0.05)"/></svg>')];
+    background-attachment: fixed;
+    background-position: 0 0;
+  }
+
+  /* ─── Typography: Luxury Hierarchy ─── */
+  .text-luxury-heading {
+    @apply font-semibold text-[var(--color-text-luxury)];
+    letter-spacing: -0.5px;
+  }
+
+  .text-luxury-subheading {
+    @apply font-medium text-[var(--color-text-secondary)];
+    letter-spacing: -0.3px;
+  }
+
+  .text-luxury-body {
+    @apply font-normal text-[var(--color-text-muted)];
+    line-height: 1.6;
+  }
+
+  /* ─── Hover Effects: Luxury Lift ─── */
+  .luxury-hover-lift {
+    transition: all var(--duration-normal) var(--easing-luxury);
+  }
+
+  .luxury-hover-lift:hover {
+    transform: translateY(-6px);
+    box-shadow: var(--shadow-luxury);
+  }
+
+  /* ─── Animated Glow ─── */
+  .glow-pulse {
+    animation: glowPulse 2s ease-in-out infinite;
+  }
+
+  @keyframes glowPulse {
+    0%, 100% {
+      box-shadow: var(--shadow-glow);
+    }
+    50% {
+      box-shadow: var(--shadow-glow-strong);
+    }
+  }
+
+  /* ─── Emerald Green Gradient Button ─── */
+  .btn-luxury-primary {
+    @apply bg-gradient-to-r from-[var(--color-brand-green)] to-[var(--color-brand-green-light)] text-white font-semibold rounded-lg px-6 py-3;
+    box-shadow: var(--shadow-lg);
+    transition: all var(--duration-normal) var(--easing-luxury);
+  }
+
+  .btn-luxury-primary:hover {
+    box-shadow: var(--shadow-luxury);
+    transform: translateY(-2px) scale(1.02);
+  }
+
+  /* ─── Gold Accent Button ─── */
+  .btn-luxury-gold {
+    @apply bg-gradient-to-r from-[var(--color-brand-gold)] to-[var(--color-brand-gold-light)] text-white font-semibold rounded-lg px-6 py-3;
+    box-shadow: var(--shadow-lg);
+    transition: all var(--duration-normal) var(--easing-luxury);
+  }
+
+  .btn-luxury-gold:hover {
+    box-shadow: var(--shadow-luxury);
+    transform: translateY(-2px) scale(1.02);
+  }
+
+  /* ─── Stat Card (Dashboard) ─── */
+  .stat-card {
+    @apply bg-white rounded-xl border border-[var(--color-border-light)] p-6;
+    box-shadow: var(--shadow-sm);
+    transition: all var(--duration-normal);
+  }
+
+  .stat-card:hover {
+    box-shadow: var(--shadow-md);
+  }
+
+  .stat-card.premium {
+    @apply bg-gradient-to-br from-white to-[var(--color-bg-primary)] border-[var(--color-border-luxury)];
+    box-shadow: var(--shadow-luxury);
+  }
+
+  /* ─── Divider Lines ─── */
+  .divider-luxury {
+    @apply border-t border-[var(--color-border-luxury)] opacity-50;
+  }
+
+  /* ─── Status Badges with Glassmorphism ─── */
+  .badge-glass {
+    @apply glass-card px-3 py-1 rounded-full text-sm font-semibold;
+  }
+
+  /* ─── Input Fields with Luxury Styling ─── */
+  .input-luxury {
+    @apply bg-white/50 backdrop-blur-sm border border-[var(--color-border-light)] rounded-lg px-4 py-2;
+    transition: all var(--duration-fast);
+  }
+
+  .input-luxury:focus {
+    @apply border-[var(--color-brand-green)] bg-white outline-none;
+    box-shadow: 0 0 0 3px rgba(27, 67, 50, 0.1);
+  }
+
+  /* ─── Section Headers ─── */
+  .section-header-luxury {
+    @apply border-b border-[var(--color-border-luxury)] pb-4 mb-6;
+  }
+
+  .section-header-luxury h2 {
+    @apply text-luxury-heading text-xl;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   ANIMATIONS: Smooth Transitions for Luxury Experience
+   ───────────────────────────────────────────────────────────────────── */
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+@layer utilities {
+  .animate-slide-in {
+    animation: slideIn 0.5s ease-out;
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.4s ease-out;
+  }
+
+  .animate-shimmer {
+    animation: shimmer 2s infinite;
+  }
+}

@@ -1,18 +1,17 @@
 """
-Payments Router
-===============
-Full CRUD for payment_records table.
+Payments Router - Financial Transactions Management
 
-Table: public.payment_records
-Statuses: pending | partial | full | refunded | cancelled
-Methods:  cash | bank | pos | cheque
+Implements payment tracking from CRM-RULES.MD:
+- financial_transactions table
+- amount_paid, remaining_balance
+- payment_method: CASH, BANK_TRANSFER, POS
 """
 from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.security import AuthToken, require_auth
@@ -21,23 +20,15 @@ from app.services.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_TABLE          = "payment_records"
-_PROFILES_TABLE = "profiles"
-
-_VALID_STATUSES = {"pending", "partial", "full", "refunded", "cancelled"}
-_VALID_METHODS  = {"cash", "bank", "pos", "cheque"}
+_VALID_METHODS = {"CASH", "BANK_TRANSFER", "POS"}
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
-class PaymentCreate(BaseModel):
-    client_name:       str            = Field(..., min_length=1, max_length=255)
-    booking_reference: Optional[str]  = Field(None, max_length=100)
-    amount:            float          = Field(..., gt=0)
-    payment_method:    str            = Field(..., description="cash | bank | pos | cheque")
-    status:            str            = Field("pending", description="pending | partial | full | refunded | cancelled")
-    payment_date:      Optional[str]  = Field(None, description="YYYY-MM-DD")
-    notes:             Optional[str]  = None
+class TransactionCreate(BaseModel):
+    booking_id: str; user_id: str; amount_paid: float = Field(..., gt=0)
+    remaining_balance: float = Field(..., ge=0)
+    payment_method: str; receipt_url: Optional[str] = None
 
     @field_validator("payment_method")
     @classmethod
@@ -46,227 +37,138 @@ class PaymentCreate(BaseModel):
             raise ValueError(f"payment_method must be one of {_VALID_METHODS}")
         return v
 
-    @field_validator("status")
-    @classmethod
-    def status_valid(cls, v: str) -> str:
-        if v not in _VALID_STATUSES:
-            raise ValueError(f"status must be one of {_VALID_STATUSES}")
-        return v
-
-
-class PaymentUpdate(BaseModel):
-    client_name:       Optional[str]   = Field(None, min_length=1, max_length=255)
-    booking_reference: Optional[str]   = Field(None, max_length=100)
-    amount:            Optional[float] = Field(None, gt=0)
-    payment_method:    Optional[str]   = None
-    status:            Optional[str]   = None
-    payment_date:      Optional[str]   = None
-    notes:             Optional[str]   = None
-
-    @field_validator("payment_method")
-    @classmethod
-    def method_valid(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v not in _VALID_METHODS:
-            raise ValueError(f"payment_method must be one of {_VALID_METHODS}")
-        return v
-
-    @field_validator("status")
-    @classmethod
-    def status_valid(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v not in _VALID_STATUSES:
-            raise ValueError(f"status must be one of {_VALID_STATUSES}")
-        return v
-
-
-class PaymentResponse(BaseModel):
-    id:                str
-    client_name:       str
-    booking_reference: Optional[str]  = None
-    amount:            float
-    payment_method:    str
-    status:            str
-    payment_date:      Optional[str]  = None
-    notes:             Optional[str]  = None
-    organization_id:   Optional[str]  = None
-    created_by:        Optional[str]  = None
-    created_at:        Optional[str]  = None
-    updated_at:        Optional[str]  = None
+class TransactionResponse(BaseModel):
+    id: str; booking_id: str; user_id: str; amount_paid: float
+    remaining_balance: float; payment_method: str
+    receipt_url: Optional[str] = None; paid_at: Optional[str] = None
     model_config = {"extra": "allow"}
-
-
-class PaymentSearchResponse(BaseModel):
-    results: List[Dict[str, Any]]
-    count:   int
-    filters_applied: Dict[str, Any]
-
-
-class StatusSummaryResponse(BaseModel):
-    total: int
-    by_status: Dict[str, int]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _profile_id(supabase: Any, user_id: str) -> Optional[str]:
-    try:
-        r = supabase.table(_PROFILES_TABLE).select("id").eq("user_id", user_id).limit(1).execute()
-        if r.data:
-            return str(r.data[0]["id"])
-    except Exception as e:
-        logger.warning(f"Profile lookup failed: {e}")
-    return None
+def _require_staff(token: AuthToken) -> AuthToken:
+    if token.role not in ("staff", "admin"):
+        raise HTTPException(403, "Staff access required")
+    return token
 
 
-def _db_error(exc: Exception, ctx: str) -> HTTPException:
-    msg = str(exc)
-    logger.error(f"[payments] DB error in {ctx}: {msg}")
-    if "duplicate key" in msg or "unique constraint" in msg:
-        return HTTPException(status_code=409, detail="Duplicate booking reference.")
-    if "permission denied" in msg:
-        return HTTPException(status_code=403, detail="Permission denied.")
-    return HTTPException(status_code=500, detail=f"Database error in {ctx}: {msg}")
+# ── POST /transactions ────────────────────────────────────────────────────────
 
-
-# ── POST /payments ────────────────────────────────────────────────────────────
-
-@router.post("/payments", response_model=PaymentResponse, status_code=201)
-async def create_payment(
-    body: PaymentCreate,
+@router.post("/transactions", response_model=TransactionResponse, status_code=201)
+async def create_transaction(
+    body: TransactionCreate,
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
 ):
-    pid = _profile_id(supabase, token.user_id)
-    if not pid:
-        raise HTTPException(403, "No profile found for this account.")
+    """Create financial transaction for booking"""
+    _require_staff(token)
     data = body.model_dump(exclude_none=False)
-    data["created_by"] = pid
-    for col in ("id", "created_at", "updated_at"):
-        data.pop(col, None)
     try:
-        r = supabase.table(_TABLE).insert(data).execute()
+        r = supabase.table("financial_transactions").insert(data).execute()
         row = r.data[0] if r.data else None
         if not row:
-            raise HTTPException(500, "Insert returned no data.")
-        logger.info(f"[payments] created {row['id']} by {token.user_id}")
-        return PaymentResponse(**row)
+            raise HTTPException(500, "Insert failed")
+        logger.info(f"[payments] Created transaction {row['id']} by {token.user_id}")
+        return TransactionResponse(**row)
     except HTTPException:
         raise
-    except Exception as exc:
-        raise _db_error(exc, "create_payment")
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
-# ── GET /payments ─────────────────────────────────────────────────────────────
+# ── GET /transactions ─────────────────────────────────────────────────────────
 
-@router.get("/payments", response_model=PaymentSearchResponse)
-async def search_payments(
+@router.get("/transactions", response_model=Dict[str, Any])
+async def list_transactions(
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
-    client_name:       Optional[str]   = Query(None),
-    booking_reference: Optional[str]   = Query(None),
-    status:            Optional[str]   = Query(None),
-    payment_method:    Optional[str]   = Query(None),
-    date_from:         Optional[str]   = Query(None, description="YYYY-MM-DD"),
-    date_to:           Optional[str]   = Query(None, description="YYYY-MM-DD"),
-    limit:             int             = Query(100, ge=1, le=500),
-    offset:            int             = Query(0, ge=0),
+    booking_id: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ):
-    pid = _profile_id(supabase, token.user_id)
-    if not pid:
-        return PaymentSearchResponse(results=[], count=0, filters_applied={})
+    """List financial transactions"""
+    _require_staff(token)
     try:
-        q = supabase.table(_TABLE).select("*", count="exact").eq("created_by", pid)
-        if client_name:       q = q.ilike("client_name", f"%{client_name}%")
-        if booking_reference: q = q.ilike("booking_reference", f"%{booking_reference}%")
-        if status:            q = q.eq("status", status)
-        if payment_method:    q = q.eq("payment_method", payment_method)
-        if date_from:         q = q.gte("payment_date", date_from)
-        if date_to:           q = q.lte("payment_date", date_to)
+        q = supabase.table("financial_transactions").select("*", count="exact")
+        if booking_id:
+            q = q.eq("booking_id", booking_id)
+        if user_id:
+            q = q.eq("user_id", user_id)
         q = q.order("created_at", desc=True).range(offset, offset + limit - 1)
         r = q.execute()
-        results = r.data or []
-        total   = r.count if r.count is not None else len(results)
-        return PaymentSearchResponse(
-            results=results, count=total,
-            filters_applied=dict(client_name=client_name, booking_reference=booking_reference,
-                                 status=status, payment_method=payment_method,
-                                 date_from=date_from, date_to=date_to),
-        )
-    except Exception as exc:
-        raise _db_error(exc, "search_payments")
+        return {"transactions": r.data or [], "total": r.count or 0}
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
-
-# ── GET /payments/summary ─────────────────────────────────────────────────────
-
-@router.get("/payments/summary", response_model=StatusSummaryResponse)
-async def payments_summary(
+@router.get("/transactions/{trans_id}", response_model=TransactionResponse)
+async def get_transaction(
+    trans_id: str,
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
 ):
-    pid = _profile_id(supabase, token.user_id)
+    """Get transaction details"""
+    _require_staff(token)
     try:
-        r = supabase.table(_TABLE).select("status").eq("created_by", pid).execute()
-        rows = r.data or []
-        by_status: Dict[str, int] = {s: 0 for s in _VALID_STATUSES}
-        for row in rows:
-            s = row.get("status", "")
-            if s in by_status:
-                by_status[s] += 1
-        return StatusSummaryResponse(total=len(rows), by_status=by_status)
-    except Exception as exc:
-        raise _db_error(exc, "payments_summary")
-
-
-# ── PATCH /payments/{id} ──────────────────────────────────────────────────────
-
-@router.patch("/payments/{payment_id}", response_model=PaymentResponse)
-async def update_payment(
-    payment_id: str,
-    body: PaymentUpdate,
-    token: AuthToken = Depends(require_auth),
-    supabase: Any = Depends(get_supabase),
-):
-    pid = _profile_id(supabase, token.user_id)
-    if not pid:
-        raise HTTPException(403, "No profile found.")
-    data = body.model_dump(exclude_none=True)
-    if not data:
-        raise HTTPException(400, "No fields to update.")
-    try:
-        r = supabase.table(_TABLE).update(data).eq("id", payment_id).eq("created_by", pid).execute()
-        rows = r.data or []
-        if not rows:
-            raise HTTPException(404, f"Payment {payment_id} not found.")
-        return PaymentResponse(**rows[0])
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _db_error(exc, f"update_payment({payment_id})")
-
-
-# ── DELETE /payments/{id} ─────────────────────────────────────────────────────
-
-@router.delete("/payments/{payment_id}", status_code=200)
-async def delete_payment(
-    payment_id: str,
-    token: AuthToken = Depends(require_auth),
-    supabase: Any = Depends(get_supabase),
-) -> Dict[str, Any]:
-    pid = _profile_id(supabase, token.user_id)
-    if not pid:
-        raise HTTPException(403, "No profile found.")
-    try:
-        r = supabase.table(_TABLE).delete().eq("id", payment_id).eq("created_by", pid).execute()
+        r = supabase.table("financial_transactions").select("*").eq("id", trans_id).limit(1).execute()
         if not r.data:
-            raise HTTPException(404, f"Payment {payment_id} not found.")
-        return {"success": True, "deleted_id": payment_id}
+            raise HTTPException(404, "Transaction not found")
+        return TransactionResponse(**r.data[0])
     except HTTPException:
         raise
-    except Exception as exc:
-        raise _db_error(exc, f"delete_payment({payment_id})")
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
-# ── GET /payments/health ──────────────────────────────────────────────────────
+# ── PATCH /transactions/{id}/payment ──────────────────────────────────────────
 
-@router.get("/payments/health")
-async def payments_health() -> Dict[str, Any]:
+@router.patch("/transactions/{trans_id}/payment")
+async def record_payment(
+    trans_id: str,
+    amount: float = Query(..., gt=0),
+    method: str = Query(...),
+    receipt_url: Optional[str] = Query(None),
+    token: AuthToken = Depends(require_auth),
+    supabase: Any = Depends(get_supabase),
+):
+    """Record payment for transaction"""
+    _require_staff(token)
+    if method not in _VALID_METHODS:
+        raise HTTPException(400, f"Invalid method: {method}")
+    
+    try:
+        # Get transaction
+        r = supabase.table("financial_transactions").select("*").eq("id", trans_id).limit(1).execute()
+        if not r.data:
+            raise HTTPException(404, "Transaction not found")
+        trans = r.data[0]
+        
+        # Calculate new remaining balance
+        new_paid = trans.get("amount_paid", 0) + amount
+        new_remaining = max(0, trans.get("remaining_balance", 0) - amount)
+        
+        # Update transaction
+        upd = supabase.table("financial_transactions").update({
+            "amount_paid": new_paid,
+            "remaining_balance": new_remaining,
+            "payment_method": method,
+            "receipt_url": receipt_url,
+            "paid_at": __import__("datetime").datetime.utcnow().isoformat(),
+        }).eq("id", trans_id).execute()
+        
+        # If fully paid, update booking status
+        if new_remaining <= 0:
+            booking_id = trans.get("booking_id")
+            supabase.table("bookings").update({"status": "CONFIRMED"}).eq("id", booking_id).execute()
+        
+        logger.info(f"[payments] Payment {amount} recorded for {trans_id}")
+        return {"success": True, "transaction_id": trans_id, "amount": amount, "remaining": new_remaining}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@router.get("/health")
+async def health():
     return {"status": "operational", "service": "payments"}

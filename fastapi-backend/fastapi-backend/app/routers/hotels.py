@@ -159,48 +159,68 @@ class SearchResponse(BaseModel):
 
 # ─── Internal helpers ─────────────────────────────────────────────────────────
 
-def _resolve_profile_id(supabase: Any, auth_user_id: str) -> Optional[str]:
-    """
-    Look up the profiles.id (PK) for the given auth user UUID.
-
-    The hotel_offers.created_by column references profiles(id), NOT
-    auth.users(id), so we need the profile row's own UUID.
-
-    Returns None if the user has no profile yet (edge case during signup
-    race conditions). Callers decide whether to hard-fail or proceed with
-    the auth UUID as a fallback.
-    """
+def _get_profile_id(supabase: Any, auth_user_id: str) -> Optional[str]:
+    """Get profile ID for user. Returns None if not found."""
     try:
-        resp = (
-            supabase.table(_PROFILES_TABLE)
-            .select("id")
-            .eq("user_id", auth_user_id)
-            .limit(1)
-            .execute()
-        )
-        if resp.data:
-            return str(resp.data[0]["id"])
+        resp = supabase.table(_PROFILES_TABLE).select("id").eq("user_id", auth_user_id).limit(1).execute()
+        return str(resp.data[0]["id"]) if resp.data else None
     except Exception as exc:
-        logger.warning(f"Profile lookup failed for user {auth_user_id}: {exc}")
-    return None
+        logger.warning(f"Profile lookup failed for {auth_user_id}: {exc}")
+        return None
 
 
-def _build_record(hotel: HotelOfferCreate, profile_id: Optional[str]) -> Dict[str, Any]:
-    """
-    Convert a HotelOfferCreate into a flat dict ready for Supabase insert.
-    Excludes fields that are DB-managed (id, is_active, created_at, updated_at).
-    """
+def _build_hotel_record(hotel: HotelOfferCreate, profile_id: Optional[str]) -> Dict[str, Any]:
+    """Transform HotelOfferCreate to database record."""
     data = hotel.model_dump(exclude_none=False)
-
-    # DB manages these; never send them
     for col in ("id", "is_active", "created_at", "updated_at"):
         data.pop(col, None)
-
-    # Ownership column: prefer the profile PK; fall back to the auth UUID so
-    # the insert never fails if the profile is slightly delayed.
     data["created_by"] = profile_id
-
     return data
+
+
+def _validate_hotel_records(hotels: List[HotelOfferCreate]) -> List[str]:
+    """Validate hotel records. Returns list of errors."""
+    errors = []
+    for idx, hotel in enumerate(hotels):
+        try:
+            hotel.model_validate(hotel.model_dump())
+        except Exception as exc:
+            errors.append(f"Row {idx + 1} ({hotel.hotel_name!r}): {exc}")
+    return errors
+
+
+def _map_search_filters(
+    query: Any,
+    city: Optional[str],
+    country: Optional[str],
+    min_price: Optional[float],
+    max_price: Optional[float],
+    hotel_rating: Optional[float],
+    available_from: Optional[str],
+    available_to: Optional[str],
+    source: Optional[str],
+    include_inactive: bool,
+) -> Any:
+    """Apply filters to search query."""
+    if not include_inactive:
+        query = query.eq("is_active", True)
+    if city:
+        query = query.ilike("hotel_city", f"%{city}%")
+    if country:
+        query = query.ilike("hotel_country", f"%{country}%")
+    if min_price is not None:
+        query = query.gte("price_per_night", min_price)
+    if max_price is not None:
+        query = query.lte("price_per_night", max_price)
+    if hotel_rating is not None:
+        query = query.gte("hotel_rating", hotel_rating)
+    if available_from:
+        query = query.gte("available_to", available_from)
+    if available_to:
+        query = query.lte("available_from", available_to)
+    if source and source in _VALID_SOURCES:
+        query = query.eq("source", source)
+    return query
 
 
 def _classify_db_error(exc: Exception, context: str) -> HTTPException:
@@ -252,19 +272,7 @@ async def bulk_insert_hotels(
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
 ) -> BulkInsertResponse:
-    """
-    Persist a list of hotel offers to ``public.hotel_offers``.
-
-    **Requires:** ``Authorization: Bearer <supabase_access_token>``
-
-    - Each record is tagged with ``created_by`` = the profile UUID of the
-      authenticated user.
-    - Inserts are executed in a single Supabase batch call.
-    - Partial failures: if Supabase rejects the batch, the endpoint returns
-      ``500`` with the raw DB error — it does **not** return a fake success.
-
-    Returns 201 Created with the list of inserted UUIDs on full success.
-    """
+    """Persist list of hotel offers to database."""
     if not hotels:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -277,51 +285,29 @@ async def bulk_insert_hotels(
             detail="Batch too large. Maximum 500 records per request.",
         )
 
-    # Resolve profile ID once for the whole batch
-    profile_id = _resolve_profile_id(supabase, token.user_id)
-    if profile_id is None:
-        logger.warning(
-            f"No profile found for auth user {token.user_id} — "
-            "will use auth UUID as fallback for created_by"
-        )
-
-    # Build records, collecting per-row validation errors
-    records: List[Dict[str, Any]] = []
-    row_errors: List[str] = []
-
-    for idx, hotel in enumerate(hotels):
-        try:
-            records.append(_build_record(hotel, profile_id))
-        except Exception as exc:
-            row_errors.append(f"Row {idx + 1} ({hotel.hotel_name!r}): {exc}")
-
+    # Validate records
+    row_errors = _validate_hotel_records(hotels)
     if row_errors:
-        # Pre-insert validation failed — fail fast before touching the DB
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "message": "One or more records failed validation before insert.",
-                "errors": row_errors,
-            },
+            detail={"message": "Validation failed", "errors": row_errors},
         )
 
-    # ── Single batch insert ───────────────────────────────────────────────────
+    profile_id = _get_profile_id(supabase, token.user_id)
+    if profile_id is None:
+        logger.warning(f"No profile for {token.user_id}")
+
+    # Build records
+    records = [_build_hotel_record(hotel, profile_id) for hotel in hotels]
+
     try:
-        response = (
-            supabase.table(_TABLE)
-            .insert(records)
-            .execute()
-        )
+        response = supabase.table(_TABLE).insert(records).execute()
     except Exception as exc:
         raise _classify_db_error(exc, "bulk_insert_hotels")
 
-    inserted = response.data or []
-    inserted_ids = [str(row["id"]) for row in inserted if "id" in row]
+    inserted_ids = [str(row["id"]) for row in (response.data or []) if "id" in row]
 
-    logger.info(
-        f"[hotels] bulk_insert: {len(inserted_ids)} rows inserted "
-        f"by user={token.user_id} profile={profile_id}"
-    )
+    logger.info(f"[hotels] Inserted {len(inserted_ids)} records for user={token.user_id}")
 
     return BulkInsertResponse(
         success=True,
@@ -339,92 +325,48 @@ async def bulk_insert_hotels(
 async def search_hotels(
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
-    # ── Filters ─────────────────────────────────────────────────
-    city: Optional[str] = Query(None, description="Filter by hotel city (partial match)"),
-    country: Optional[str] = Query(None, description="Filter by hotel country (partial match)"),
-    min_price: Optional[float] = Query(None, ge=0, description="Minimum price per night"),
-    max_price: Optional[float] = Query(None, ge=0, description="Maximum price per night"),
-    available_from: Optional[str] = Query(None, description="Availability window start (YYYY-MM-DD)"),
-    available_to: Optional[str] = Query(None, description="Availability window end (YYYY-MM-DD)"),
-    hotel_rating: Optional[float] = Query(None, ge=0.0, le=5.0, description="Minimum star rating"),
-    source: Optional[str] = Query(None, description="Filter by upload source"),
-    include_inactive: bool = Query(False, description="Include inactive offers"),
-    # ── Pagination ───────────────────────────────────────────────
-    limit: int = Query(50, ge=1, le=200, description="Max records to return"),
-    offset: int = Query(0, ge=0, description="Pagination offset"),
+    city: Optional[str] = Query(None),
+    country: Optional[str] = Query(None),
+    min_price: Optional[float] = Query(None, ge=0),
+    max_price: Optional[float] = Query(None, ge=0),
+    available_from: Optional[str] = Query(None),
+    available_to: Optional[str] = Query(None),
+    hotel_rating: Optional[float] = Query(None, ge=0.0, le=5.0),
+    source: Optional[str] = Query(None),
+    include_inactive: bool = Query(False),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ) -> SearchResponse:
-    """
-    Search hotel offers belonging to the authenticated user.
-
-    **Requires:** ``Authorization: Bearer <supabase_access_token>``
-
-    Results are scoped to ``created_by`` = the authenticated user's profile,
-    ensuring complete data isolation between users.
-
-    Supports partial-match filters on city/country, range filters on price
-    and dates, star rating filter, and basic pagination.
-    """
-    # Resolve profile ID for the ownership filter
-    profile_id = _resolve_profile_id(supabase, token.user_id)
+    """Search hotel offers with filters."""
+    profile_id = _get_profile_id(supabase, token.user_id)
 
     try:
         query = supabase.table(_TABLE).select("*", count="exact")
 
-        # ── Ownership filter (data isolation) ──────────────────────────────
         if profile_id:
             query = query.eq("created_by", profile_id)
         else:
-            # If profile is missing we cannot safely scope results —
-            # return empty rather than leaking other users' data.
-            logger.warning(
-                f"Profile not found for auth user {token.user_id}; "
-                "returning empty search results."
-            )
+            logger.warning(f"No profile for {token.user_id}")
             return SearchResponse(
                 results=[],
                 count=0,
-                filters_applied={"warning": "No profile found for this user."},
+                filters_applied={"warning": "No profile found"},
             )
 
-        # ── Active status ───────────────────────────────────────────────────
-        if not include_inactive:
-            query = query.eq("is_active", True)
-
-        # ── Optional filters ────────────────────────────────────────────────
-        if city:
-            query = query.ilike("hotel_city", f"%{city}%")
-        if country:
-            query = query.ilike("hotel_country", f"%{country}%")
-        if min_price is not None:
-            query = query.gte("price_per_night", min_price)
-        if max_price is not None:
-            query = query.lte("price_per_night", max_price)
-        if hotel_rating is not None:
-            query = query.gte("hotel_rating", hotel_rating)
-        if available_from:
-            # Offers whose availability window ends on or after the requested start
-            query = query.gte("available_to", available_from)
-        if available_to:
-            # Offers whose availability window starts on or before the requested end
-            query = query.lte("available_from", available_to)
-        if source and source in _VALID_SOURCES:
-            query = query.eq("source", source)
-
-        # ── Ordering & pagination ───────────────────────────────────────────
-        query = (
-            query
-            .order("created_at", desc=True)
-            .range(offset, offset + limit - 1)
+        # Apply filters
+        query = _map_search_filters(
+            query, city, country, min_price, max_price, hotel_rating,
+            available_from, available_to, source, include_inactive
         )
+
+        # Pagination
+        query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
 
         response = query.execute()
-        results: List[Dict[str, Any]] = response.data or []
-        total_count: int = response.count if response.count is not None else len(results)
+        results = response.data or []
+        total_count = response.count if response.count is not None else len(results)
 
-        logger.info(
-            f"[hotels] search: {len(results)} results (total={total_count}) "
-            f"for user={token.user_id} city={city!r} country={country!r}"
-        )
+        logger.info(f"[hotels] search: {len(results)} results for user={token.user_id}")
 
         return SearchResponse(
             results=results,
@@ -434,11 +376,6 @@ async def search_hotels(
                 "country": country,
                 "min_price": min_price,
                 "max_price": max_price,
-                "available_from": available_from,
-                "available_to": available_to,
-                "hotel_rating": hotel_rating,
-                "source": source,
-                "include_inactive": include_inactive,
                 "limit": limit,
                 "offset": offset,
             },
@@ -458,24 +395,15 @@ async def deactivate_hotel_offer(
     token: AuthToken = Depends(require_auth),
     supabase: Any = Depends(get_supabase),
 ) -> Dict[str, Any]:
-    """
-    Soft-delete a hotel offer by setting ``is_active = FALSE``.
-
-    **Requires:** ``Authorization: Bearer <supabase_access_token>``
-
-    Only the owner (``created_by`` = current user's profile) can deactivate
-    a record. Attempting to deactivate another user's offer returns 404 so
-    we do not leak the existence of other users' data.
-    """
-    profile_id = _resolve_profile_id(supabase, token.user_id)
+    """Soft-delete (deactivate) a hotel offer."""
+    profile_id = _get_profile_id(supabase, token.user_id)
     if not profile_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="No profile found for this account. Cannot modify hotel offers.",
+            detail="No profile found for this account.",
         )
 
     try:
-        # Scoped update: only touches rows owned by the current user
         response = (
             supabase.table(_TABLE)
             .update({"is_active": False})
@@ -487,9 +415,9 @@ async def deactivate_hotel_offer(
         if not updated:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Hotel offer {offer_id!r} not found or not owned by this account.",
+                detail=f"Offer {offer_id!r} not found or not owned by you.",
             )
-        logger.info(f"[hotels] offer {offer_id} deactivated by user={token.user_id}")
+        logger.info(f"[hotels] Deactivated {offer_id} by {token.user_id}")
         return {"success": True, "deactivated_id": offer_id}
 
     except HTTPException:
