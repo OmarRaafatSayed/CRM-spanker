@@ -30,6 +30,7 @@ const en = {
   // ── Nav ──────────────────────────────────────────────────────
   nav: {
     dashboard: 'Dashboard',
+    customers: 'Customers',
     flights:   'Flights',
     hotels:    'Hotels',
     visa:      'Visa',
@@ -40,9 +41,24 @@ const en = {
 
   // ── Dashboard ────────────────────────────────────────────────
   dashboard: {
-    welcome: 'Welcome back 👋',
-    welcomeDesc: 'Select a module from the sidebar (desktop) or the bottom bar (mobile) to get started.',
-    open: 'Open',
+    welcome:         'Welcome back',
+    welcomeDesc:     'Select a module from the sidebar (desktop) or the bottom bar (mobile) to get started.',
+    open:            'Open',
+    visits:          'Visits',
+    thisMonth:       'This month',
+    pendingLeads:    'Pending Leads',
+    awaitingCRM:     'Awaiting follow-up',
+    activePackages:  'Active Packages',
+    onWebsite:       'On website',
+    completed:       'Completed',
+    allTime:         'All time',
+    quickActions:    'Quick Actions',
+    addPackage:      'Add Package',
+    addBanner:       'Add Banner',
+    reviewLeads:     'Review Leads',
+    systemLogs:      'System Logs',
+    statusConnected: 'Connected',
+    statusReady:     'System Ready',
   },
 
   // ── Flights ──────────────────────────────────────────────────

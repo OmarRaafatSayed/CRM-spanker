@@ -40,6 +40,8 @@ import { LangToggle } from './components/LangToggle'
 import {
   Plane, Hotel, FileText, CreditCard,
   LogIn, UserPlus, Users, ChevronRight, Loader2, Eye, EyeOff,
+  TrendingUp, Clock, Package, CheckCircle2, Wifi, Settings,
+  PackagePlus, Image, UserCheck, ScrollText,
 } from 'lucide-react'
 import {
   supabase,
@@ -400,7 +402,7 @@ function App() {
                     label={t('dashboard.visits')}
                     value="4,821"
                     subtext={t('dashboard.thisMonth')}
-                    icon="👁️"
+                    icon={<TrendingUp className="h-6 w-6" />}
                     badgeColor="blue"
                     variant="premium"
                   />
@@ -408,7 +410,7 @@ function App() {
                     label={t('dashboard.pendingLeads')}
                     value="13"
                     subtext={t('dashboard.awaitingCRM')}
-                    icon="⏳"
+                    icon={<Clock className="h-6 w-6" />}
                     badgeColor="cyan"
                     variant="premium"
                   />
@@ -416,7 +418,7 @@ function App() {
                     label={t('dashboard.activePackages')}
                     value="8"
                     subtext={t('dashboard.onWebsite')}
-                    icon="📦"
+                    icon={<Package className="h-6 w-6" />}
                     badgeColor="emerald"
                     variant="premium"
                   />
@@ -424,7 +426,7 @@ function App() {
                     label={t('dashboard.completed')}
                     value="142"
                     subtext={t('dashboard.allTime')}
-                    icon="✅"
+                    icon={<CheckCircle2 className="h-6 w-6" />}
                     badgeColor="gold"
                     variant="premium"
                   />
@@ -434,8 +436,8 @@ function App() {
                   <h2 className="text-luxury-heading text-lg mb-1">{t('dashboard.welcome')}</h2>
                   <p className="text-luxury-body mb-4">{t('dashboard.welcomeDesc')}</p>
                   <div className="flex gap-2">
-                    <LuxuryBadge label="متصل" variant="approved" style="gradient" icon="🟢" />
-                    <LuxuryBadge label="نظام جاهز" variant="info" style="gradient" icon="⚙️" />
+                    <LuxuryBadge label={t('dashboard.statusConnected')} variant="approved" style="gradient" icon={<Wifi className="h-3 w-3" />} />
+                    <LuxuryBadge label={t('dashboard.statusReady')}     variant="info"     style="gradient" icon={<Settings className="h-3 w-3" />} />
                   </div>
                 </LuxuryCard>
 
@@ -443,18 +445,18 @@ function App() {
                   <h2 className="text-luxury-heading text-base mb-3">{t('dashboard.quickActions')}</h2>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {[
-                      { href: '#', label: t('dashboard.addPackage'), icon: '📦', color: 'emerald' },
-                      { href: '#', label: t('dashboard.addBanner'), icon: '🖼️', color: 'blue' },
-                      { href: '#', label: t('dashboard.reviewLeads'), icon: '👥', color: 'gold' },
-                      { href: '#', label: t('dashboard.systemLogs'), icon: '📋', color: 'purple' },
+                      { label: t('dashboard.addPackage'),  Icon: PackagePlus,  color: 'text-emerald-600' },
+                      { label: t('dashboard.addBanner'),   Icon: Image,        color: 'text-blue-600'    },
+                      { label: t('dashboard.reviewLeads'), Icon: UserCheck,   color: 'text-amber-600'   },
+                      { label: t('dashboard.systemLogs'),  Icon: ScrollText,   color: 'text-purple-600'  },
                     ].map(item => (
                       <LuxuryCard
-                        key={item.href}
+                        key={item.label}
                         variant="default"
-                        className="flex flex-col items-center gap-2 text-center !p-4"
-                        onClick={() => console.log(item.label)}
+                        className="flex flex-col items-center gap-2 text-center !p-4 cursor-pointer"
+                        onClick={() => {}}
                       >
-                        <span className="text-2xl">{item.icon}</span>
+                        <item.Icon className={`h-7 w-7 ${item.color}`} />
                         <span className="text-sm font-medium text-[var(--color-text-primary)]">{item.label}</span>
                       </LuxuryCard>
                     ))}
