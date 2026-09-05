@@ -42,7 +42,7 @@ import {
   LogIn, UserPlus, Users, ChevronRight, Loader2, Eye, EyeOff,
 } from 'lucide-react'
 import {
-  setSupabaseSession,
+  supabase,
   clearSupabaseSession,
   loadStoredSession,
   getStoredUser,
@@ -93,24 +93,40 @@ function App() {
   })
 
   // ── Step 1: Re-hydration on mount ─────────────────────────────────────────
-  // Runs once. Checks localStorage for an existing, non-expired session.
-  // If found → go straight to the app. If expired → clear and show login.
+  // Runs once. Asks the Supabase SDK for the current session (reads from
+  // localStorage, validates expiry, refreshes token if needed).
+  // If valid → skip login screen. If expired/absent → show login.
   useEffect(() => {
-    const stored = loadStoredSession()
+    let cancelled = false
 
-    if (stored && isSessionValid()) {
-      // Valid session found — restore auth state without a network call
-      setAuth({
-        isLoggedIn: true,
-        isHydrating: false,
-        user: stored.user,
-      })
-    } else {
-      // No session, or token is expired — ensure storage is clean
-      if (stored) {
-        clearSupabaseSession()
+    loadStoredSession().then(stored => {
+      if (cancelled) return
+
+      if (stored && isSessionValid()) {
+        setAuth({ isLoggedIn: true, isHydrating: false, user: stored.user })
+      } else {
+        if (stored) clearSupabaseSession()
+        setAuth({ isLoggedIn: false, isHydrating: false, user: null })
       }
-      setAuth({ isLoggedIn: false, isHydrating: false, user: null })
+    })
+
+    // Also listen for session changes (token refresh, sign-out from another tab)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (cancelled) return
+      if (session) {
+        setAuth({
+          isLoggedIn: true,
+          isHydrating: false,
+          user: { id: session.user.id, email: session.user.email ?? '' },
+        })
+      } else {
+        setAuth({ isLoggedIn: false, isHydrating: false, user: null })
+      }
+    })
+
+    return () => {
+      cancelled = true
+      subscription.unsubscribe()
     }
   }, [])
 
@@ -121,68 +137,62 @@ function App() {
     setIsSubmitting(true)
 
     try {
-      const base     = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1'
-      const endpoint = isLogin ? `${base}/auth/login` : `${base}/auth/signup`
-      const body     = isLogin
-        ? { email: formData.email, password: formData.password }
-        : {
-            email:      formData.email,
-            password:   formData.password,
-            first_name: formData.firstName,
-            last_name:  formData.lastName,
-          }
+      if (isLogin) {
+        // ── Sign in ──────────────────────────────────────────────────────────
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email:    formData.email,
+          password: formData.password,
+        })
 
-      const res  = await fetch(endpoint, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(body),
-      })
-      const data = await res.json()
+        if (error) {
+          setAuthError(error.message)
+          return
+        }
 
-      if (!res.ok || !data.success) {
-        setAuthError(data.detail ?? t('auth.authFailed'))
-        return
+        if (!data.session) {
+          setAuthError(t('auth.authFailed'))
+          return
+        }
+
+        setAuth({
+          isLoggedIn: true,
+          isHydrating: false,
+          user: { id: data.user.id, email: data.user.email ?? '' },
+        })
+
+      } else {
+        // ── Sign up ──────────────────────────────────────────────────────────
+        const { data, error } = await supabase.auth.signUp({
+          email:    formData.email,
+          password: formData.password,
+          options: {
+            data: {
+              first_name: formData.firstName,
+              last_name:  formData.lastName,
+              full_name:  `${formData.firstName} ${formData.lastName}`.trim(),
+            },
+          },
+        })
+
+        if (error) {
+          setAuthError(error.message)
+          return
+        }
+
+        // Supabase may require email confirmation before a session is issued
+        if (!data.session) {
+          setAuthError(t('auth.checkEmail'))
+          return
+        }
+
+        setAuth({
+          isLoggedIn: true,
+          isHydrating: false,
+          user: { id: data.user!.id, email: data.user!.email ?? '' },
+        })
       }
 
-      // Signup with email confirmation required — show info message, don't crash
-      if (!isLogin && data.email_confirmation_required) {
-        setAuthError(data.message ?? t('auth.checkEmail'))
-        return
-      }
-
-      // Session missing for another reason
-      if (!data.session?.access_token) {
-        setAuthError(isLogin ? t('auth.authFailed') : t('auth.checkEmail'))
-        return
-      }
-
-      // ── Persist the session ──────────────────────────────────────────────
-      // Backend login response shape:
-      //   { success, user: { id, email }, session: { access_token, refresh_token } }
-      //
-      // Supabase JWTs expire in 1 hour; compute expires_at from now.
-      const expiresAt = Math.floor(Date.now() / 1000) + 3600
-
-      setSupabaseSession(
-        {
-          access_token:  data.session.access_token,
-          refresh_token: data.session.refresh_token,
-          expires_at:    expiresAt,
-        },
-        {
-          id:    data.user.id,
-          email: data.user.email,
-        },
-      )
-
-      // ── Update React state ───────────────────────────────────────────────
-      setAuth({
-        isLoggedIn: true,
-        isHydrating: false,
-        user: { id: data.user.id, email: data.user.email },
-      })
-
-      // Clear the password field for security — keep email for UX
+      // Clear sensitive fields on success
       setFormData(prev => ({ ...prev, password: '', firstName: '', lastName: '' }))
 
     } catch {
@@ -193,11 +203,11 @@ function App() {
   }, [isLogin, formData, t])
 
   // ── Step 3: Logout ────────────────────────────────────────────────────────
-  const handleLogout = useCallback(() => {
-    // 1. Wipe localStorage + in-memory cache
-    clearSupabaseSession()
+  const handleLogout = useCallback(async () => {
+    // Sign out from Supabase (clears localStorage + server session)
+    await clearSupabaseSession()
 
-    // 2. Reset all React state — next API call will have no token
+    // Reset all React state
     setAuth({ isLoggedIn: false, isHydrating: false, user: null })
     setActiveTab('dashboard')
     setFormData({ email: '', password: '', firstName: '', lastName: '' })

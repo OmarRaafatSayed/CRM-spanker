@@ -20,7 +20,7 @@ import {
   Download,
   Search,
 } from 'lucide-react'
-import { getStoredSession } from '../services/supabase'
+import { supabase } from '../services/supabase'
 
 interface Customer {
   id: string
@@ -51,7 +51,8 @@ export function CRMCustomers() {
         setLoading(true)
         setError(null)
 
-        const session = getStoredSession()
+        const { data: sessionData } = await supabase.auth.getSession()
+        const session = sessionData.session
         if (!session?.access_token) {
           setError('Not authenticated')
           return

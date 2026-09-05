@@ -19,11 +19,9 @@
  *   const results = await apiClient.searchFlights(params);
  */
 
-import { getAccessToken } from './supabase';
+import { getAccessToken, supabase } from './supabase';
 
-const FASTAPI_BASE_URL =
-  (import.meta.env.VITE_API_URL as string | undefined) ??
-  'http://localhost:8000/api/v1';
+const FASTAPI_BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? '';
 
 // ── Type definitions ──────────────────────────────────────────────────────────
 
@@ -193,14 +191,15 @@ class FastAPIClient {
   // ── Auth header ─────────────────────────────────────────────────────────────
 
   /**
-   * Build auth headers.
-   * Throws a descriptive error if the user is not authenticated so that
-   * callers get a clear message instead of a silent 401 from the server.
+   * Build auth headers using the live Supabase session.
+   * Uses the SDK's getSession() so the token is always fresh (auto-refreshed).
    *
    * @param required - Set to false for public endpoints that don't need auth.
    */
-  private authHeaders(required = true): Record<string, string> {
-    const token = getAccessToken();
+  private async authHeaders(required = true): Promise<Record<string, string>> {
+    // Prefer the SDK's session (always up-to-date after auto-refresh)
+    const { data } = await supabase.auth.getSession()
+    const token = data.session?.access_token ?? getAccessToken()
 
     if (!token) {
       if (required) {
@@ -222,11 +221,17 @@ class FastAPIClient {
     options: RequestInit = {},
     requiresAuth = true,
   ): Promise<T> {
+    if (!this.baseUrl) {
+      throw new Error(
+        'No backend URL configured. Set VITE_API_URL in your environment variables.',
+      );
+    }
+
     const url = `${this.baseUrl}${endpoint}`;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      ...this.authHeaders(requiresAuth),
+      ...(await this.authHeaders(requiresAuth)),
       ...(options.headers as Record<string, string> | undefined),
     };
 
@@ -304,7 +309,12 @@ class FastAPIClient {
 
   /** 🔒 Protected — requires authentication */
   async parseHotelDocument(file: File): Promise<DocumentParseResponse> {
-    const token = getAccessToken();
+    if (!this.baseUrl) {
+      throw new Error('No backend URL configured. Set VITE_API_URL in your environment variables.');
+    }
+
+    const { data } = await supabase.auth.getSession()
+    const token = data.session?.access_token ?? getAccessToken();
 
     if (!token) {
       throw new Error(

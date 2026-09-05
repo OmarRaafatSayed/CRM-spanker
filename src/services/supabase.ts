@@ -1,158 +1,141 @@
 /**
- * Supabase auth helper (frontend)
+ * Supabase client + auth helpers
  * ================================
- * Lightweight session store — no @supabase/supabase-js SDK required.
+ * Uses the official @supabase/supabase-js SDK.
  *
- * Persistence strategy
- * --------------------
- * The session is stored in localStorage under SESSION_KEY so it survives
- * page refreshes and browser restarts (until the token expires or the user
- * logs out).  An in-memory cache avoids repeated JSON.parse on every request.
+ * Exported functions keep the same signatures as the old manual store so
+ * that api.ts and App.tsx only need minimal changes.
  *
- * Token expiry
- * ------------
- * Supabase access tokens expire after 1 hour.  The `expires_at` field
- * (Unix seconds) is stored alongside the token so callers can detect
- * expiry without making a network round-trip.  Token refresh is handled
- * by re-logging in via the backend; automatic silent refresh can be added
- * later once @supabase/supabase-js is introduced.
- *
- * If you later add @supabase/supabase-js, replace this file with the
- * official `createClient()` call and keep the same exported function names
- * so that api.ts and App.tsx require no changes.
+ * Environment variables (must be set in .env.local and on Vercel):
+ *   VITE_SUPABASE_URL      — your Supabase project URL
+ *   VITE_SUPABASE_ANON_KEY — your Supabase anon/public key
  */
 
-// ── Storage key ───────────────────────────────────────────────────────────────
-// Intentionally namespaced so multiple projects on the same localhost
-// do not collide.
-const SESSION_KEY = 'travel_crm_sb_session';
+import { createClient, type Session, type User } from '@supabase/supabase-js'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Supabase client singleton ─────────────────────────────────────────────────
 
-export interface SupabaseSession {
-  access_token: string;
-  refresh_token: string;
-  /** Unix timestamp (seconds) — when the access_token expires */
-  expires_at?: number;
+const supabaseUrl      = import.meta.env.VITE_SUPABASE_URL      as string
+const supabaseAnonKey  = import.meta.env.VITE_SUPABASE_ANON_KEY as string
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error(
+    '[supabase] Missing env vars: VITE_SUPABASE_URL and/or VITE_SUPABASE_ANON_KEY. ' +
+    'Add them to .env.local (dev) and Vercel Environment Variables (prod).',
+  )
 }
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,          // stores session in localStorage automatically
+    autoRefreshToken: true,        // silently refreshes token before expiry
+    detectSessionInUrl: true,      // handles magic-link / OAuth redirects
+  },
+})
+
+// ── Re-exported types (used by App.tsx) ───────────────────────────────────────
+
+export type { Session, User }
 
 export interface StoredUser {
-  id: string;
-  email: string;
+  id: string
+  email: string
 }
 
-export interface StoredAuth {
-  session: SupabaseSession;
-  user: StoredUser;
-}
-
-// ── In-memory cache ───────────────────────────────────────────────────────────
-let _auth: StoredAuth | null = null;
-
-// ── Write ─────────────────────────────────────────────────────────────────────
+// ── Compatibility helpers (same names as before so api.ts still works) ────────
 
 /**
- * Persist the session returned by the backend `/auth/login` endpoint.
- * Call this immediately after a successful login or signup.
- *
- * @example
- *   const data = await res.json();
- *   setSupabaseSession(data.session, { id: data.user.id, email: data.user.email });
- */
-export function setSupabaseSession(
-  session: SupabaseSession,
-  user: StoredUser,
-): void {
-  const auth: StoredAuth = { session, user };
-  _auth = auth;
-  try {
-    localStorage.setItem(SESSION_KEY, JSON.stringify(auth));
-  } catch {
-    // localStorage blocked (private browsing / quota exceeded) — memory only
-    console.warn('[auth] localStorage unavailable; session is memory-only.');
-  }
-}
-
-// ── Clear ─────────────────────────────────────────────────────────────────────
-
-/**
- * Remove the session from memory and localStorage.
- * Call on logout or when a 401 is received from the backend.
- */
-export function clearSupabaseSession(): void {
-  _auth = null;
-  try {
-    localStorage.removeItem(SESSION_KEY);
-  } catch {
-    // ignore
-  }
-}
-
-// ── Read ──────────────────────────────────────────────────────────────────────
-
-/**
- * Load auth from localStorage into the in-memory cache.
- * Call once on app mount (re-hydration).
- *
- * Returns the stored auth object, or null if none exists / data is corrupt.
- */
-export function loadStoredSession(): StoredAuth | null {
-  // Already in memory — nothing to do
-  if (_auth) return _auth;
-
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-
-    const parsed: StoredAuth = JSON.parse(raw);
-    // Basic structure check before trusting the data
-    if (!parsed?.session?.access_token || !parsed?.user?.id) {
-      localStorage.removeItem(SESSION_KEY);
-      return null;
-    }
-
-    _auth = parsed;
-    return _auth;
-  } catch {
-    // Corrupt JSON — wipe it
-    try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
-    return null;
-  }
-}
-
-/**
- * Return the current access token, or null if the user is not logged in.
- * Used by api.ts on every request.
+ * Return the current access token from the live Supabase session.
+ * Falls back to null when the user is not signed in.
  */
 export function getAccessToken(): string | null {
-  if (_auth) return _auth.session.access_token;
-
-  const stored = loadStoredSession();
-  return stored?.session.access_token ?? null;
+  // supabase-js caches the session in memory after the first getSession() call.
+  // For synchronous access we read directly from the internal storage key.
+  const storageKey = `sb-${new URL(supabaseUrl).hostname.split('.')[0]}-auth-token`
+  try {
+    const raw = localStorage.getItem(storageKey)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return (parsed as { access_token?: string })?.access_token ?? null
+  } catch {
+    return null
+  }
 }
 
 /**
- * Return the stored user object, or null if not logged in.
+ * @deprecated — session is now managed by the SDK.
+ * Kept for backward compatibility; does nothing.
  */
-export function getStoredUser(): StoredUser | null {
-  if (_auth) return _auth.user;
-  return loadStoredSession()?.user ?? null;
+export function setSupabaseSession(): void {
+  // no-op: the SDK handles persistence automatically
 }
 
 /**
- * Returns true when there is a session whose token has not yet expired.
- * Note: the server is the ultimate source of truth — this is a client-side
- * optimisation to avoid obviously stale tokens.
+ * Sign the user out and clear the SDK session.
+ * Mirrors the old clearSupabaseSession() behaviour.
+ */
+export async function clearSupabaseSession(): Promise<void> {
+  await supabase.auth.signOut()
+}
+
+/**
+ * Load the current session from the SDK (async, checks localStorage + token validity).
+ * Returns null when there is no valid session.
+ */
+export async function loadStoredSession(): Promise<{
+  session: { access_token: string; refresh_token: string; expires_at?: number }
+  user: StoredUser
+} | null> {
+  const { data, error } = await supabase.auth.getSession()
+  if (error || !data.session) return null
+
+  const { session } = data
+  return {
+    session: {
+      access_token:  session.access_token,
+      refresh_token: session.refresh_token,
+      expires_at:    session.expires_at,
+    },
+    user: {
+      id:    session.user.id,
+      email: session.user.email ?? '',
+    },
+  }
+}
+
+/**
+ * Returns true when the SDK has a non-expired session.
+ * Synchronous check using the cached token in localStorage.
  */
 export function isSessionValid(): boolean {
-  const auth = _auth ?? loadStoredSession();
-  if (!auth) return false;
+  const token = getAccessToken()
+  if (!token) return false
 
-  const { expires_at } = auth.session;
-  if (!expires_at) return true; // no expiry metadata — assume valid
-
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  // Treat the token as expired 60 s early to account for clock skew
-  return expires_at - 60 > nowSeconds;
+  // Decode exp from the JWT payload (no crypto needed — just a check)
+  try {
+    const [, payload] = token.split('.')
+    const decoded = JSON.parse(atob(payload)) as { exp?: number }
+    if (!decoded.exp) return true
+    // Treat as expired 60 s early to account for clock skew
+    return decoded.exp - 60 > Math.floor(Date.now() / 1000)
+  } catch {
+    return true // can't decode — assume valid
+  }
 }
 
+/**
+ * Return the stored user from the SDK session.
+ */
+export function getStoredUser(): StoredUser | null {
+  const token = getAccessToken()
+  if (!token) return null
+
+  try {
+    const [, payload] = token.split('.')
+    const decoded = JSON.parse(atob(payload)) as { sub?: string; email?: string }
+    if (!decoded.sub) return null
+    return { id: decoded.sub, email: decoded.email ?? '' }
+  } catch {
+    return null
+  }
+}
