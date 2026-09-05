@@ -22,21 +22,21 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card'
-import { Button } from './components/ui/button'
-import { Input } from './components/ui/input'
-import { Label } from './components/ui/label'
-import { Toaster } from './components/ui/toaster'
-import { LuxuryStatCard } from './components/ui/LuxuryStatCard'
-import { LuxuryCard } from './components/ui/LuxuryCard'
-import { LuxuryBadge } from './components/ui/LuxuryBadge'
-import { FlightSearch } from './components/FlightSearch'
-import { HotelManagement } from './components/HotelManagement-simple'
-import { VisaManagement } from './components/VisaManagement-simple'
-import { ManualPaymentLedger } from './components/ManualPaymentLedger-simple'
-import { CRMCustomers } from './components/CRMCustomers'
-import { DesktopSidebar, MobileTabBar, MobileDrawer, NAV_IDS } from './components/Sidebar'
-import { LangToggle } from './components/LangToggle'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './shared/ui/card'
+import { Button } from './shared/ui/button'
+import { Input } from './shared/ui/input'
+import { Label } from './shared/ui/label'
+import { Toaster } from './shared/ui/toaster'
+import { LuxuryStatCard } from './shared/ui/LuxuryStatCard'
+import { LuxuryCard } from './shared/ui/LuxuryCard'
+import { LuxuryBadge } from './shared/ui/LuxuryBadge'
+import { FlightSearch } from './domains/flights/components/FlightSearch'
+import { HotelManagement } from './domains/hotels/components/HotelManagement'
+import { VisaManagement } from './domains/visa/components/VisaManagement'
+import { ManualPaymentLedger } from './domains/payments/components/PaymentLedger'
+import { CRMCustomers } from './domains/customers/components/CRMCustomers'
+import { DesktopSidebar, MobileTabBar, MobileDrawer, NAV_IDS } from './app/layout/Sidebar'
+import { LangToggle } from './app/layout/LangToggle'
 import {
   Plane, Hotel, FileText, CreditCard,
   LogIn, UserPlus, Users, ChevronRight, Loader2, Eye, EyeOff,
@@ -50,7 +50,7 @@ import {
   getStoredUser,
   isSessionValid,
   type StoredUser,
-} from './services/supabase'
+} from './shared/services/supabase'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
