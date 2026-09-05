@@ -19,6 +19,14 @@ from pydantic import BaseModel, Field
 
 from app.core.security import AuthToken, require_auth
 from app.services.supabase_client import get_supabase
+from app.services.notification_service import (
+    notify_customer,
+    get_customer_auth_id_from_users_row,
+    visa_status_str_changed,
+    quotation_status_changed,
+    booking_status_changed,
+    booking_confirmed,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -227,6 +235,21 @@ async def update_visa_status(
         if not r.data:
             raise HTTPException(404, "Application not found")
         logger.info(f"[crm] Updated visa {app_id} status to {new_status}")
+
+        # ── Portal notification ───────────────────────────────────────────────
+        # visa_applications.user_id points to the CRM 'users' table,
+        # which carries auth_user_id → auth.users.id for the customer.
+        user_id = r.data[0].get("user_id")
+        if user_id:
+            customer_auth_id = get_customer_auth_id_from_users_row(supabase, user_id)
+            if customer_auth_id:
+                await notify_customer(
+                    supabase=supabase,
+                    customer_auth_id=customer_auth_id,
+                    **visa_status_str_changed(app_id, new_status),
+                )
+        # ─────────────────────────────────────────────────────────────────────
+
         return {"success": True, "application_id": app_id, "new_status": new_status}
     except HTTPException:
         raise
@@ -290,6 +313,19 @@ async def update_quotation_status(
         if not r.data:
             raise HTTPException(404, "Quotation not found")
         logger.info(f"[crm] Updated quotation {quote_id} status to {new_status}")
+
+        # ── Portal notification ───────────────────────────────────────────────
+        user_id = r.data[0].get("user_id")
+        if user_id:
+            customer_auth_id = get_customer_auth_id_from_users_row(supabase, user_id)
+            if customer_auth_id:
+                await notify_customer(
+                    supabase=supabase,
+                    customer_auth_id=customer_auth_id,
+                    **quotation_status_changed(quote_id, new_status),
+                )
+        # ─────────────────────────────────────────────────────────────────────
+
         return {"success": True, "quotation_id": quote_id, "new_status": new_status}
     except HTTPException:
         raise
@@ -353,6 +389,28 @@ async def update_booking_status(
         if not r.data:
             raise HTTPException(404, "Booking not found")
         logger.info(f"[crm] Updated booking {booking_id} status to {new_status}")
+
+        # ── Portal notification ───────────────────────────────────────────────
+        user_id = r.data[0].get("user_id")
+        if user_id:
+            customer_auth_id = get_customer_auth_id_from_users_row(supabase, user_id)
+            if customer_auth_id:
+                # Use the richer "booking confirmed" message when status = CONFIRMED
+                if new_status == "CONFIRMED":
+                    booking_ref = r.data[0].get("booking_reference", booking_id[:8])
+                    await notify_customer(
+                        supabase=supabase,
+                        customer_auth_id=customer_auth_id,
+                        **booking_confirmed(booking_id, booking_ref),
+                    )
+                else:
+                    await notify_customer(
+                        supabase=supabase,
+                        customer_auth_id=customer_auth_id,
+                        **booking_status_changed(booking_id, new_status),
+                    )
+        # ─────────────────────────────────────────────────────────────────────
+
         return {"success": True, "booking_id": booking_id, "new_status": new_status}
     except HTTPException:
         raise

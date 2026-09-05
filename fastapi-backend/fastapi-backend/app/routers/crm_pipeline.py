@@ -23,6 +23,14 @@ from pydantic import BaseModel, Field
 
 from app.core.security import AuthContext, require_auth
 from app.services.supabase_client import get_supabase
+from app.services.notification_service import (
+    notify_customer,
+    get_customer_auth_id_from_users_row,
+    visa_status_str_changed,
+    quotation_sent,
+    booking_confirmed,
+    payment_received,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -334,6 +342,22 @@ async def update_visa_status(
 
         logger.info(f"✅ Visa status updated: {visa_id} → {new_status}")
 
+        # ── Portal notification ───────────────────────────────────────────────
+        # Fetch the visa application to find its owner (user_id → CRM users table)
+        try:
+            va = supabase.table("visa_applications").select("user_id").eq("id", visa_id).limit(1).execute()
+            if va.data:
+                customer_auth_id = get_customer_auth_id_from_users_row(supabase, va.data[0]["user_id"])
+                if customer_auth_id:
+                    await notify_customer(
+                        supabase=supabase,
+                        customer_auth_id=customer_auth_id,
+                        **visa_status_str_changed(visa_id, new_status),
+                    )
+        except Exception as notif_exc:
+            logger.warning(f"[pipeline] Visa notification skipped: {notif_exc}")
+        # ─────────────────────────────────────────────────────────────────────
+
         return {
             "success": True,
             "visa_id": visa_id,
@@ -455,6 +479,22 @@ async def send_quotation(
 
         logger.info(f"✅ Quotation sent: {quote_id}")
 
+        # ── Portal notification ───────────────────────────────────────────────
+        try:
+            qr = supabase.table("quotations").select("user_id, total_amount, currency").eq("id", quote_id).limit(1).execute()
+            if qr.data:
+                q = qr.data[0]
+                customer_auth_id = get_customer_auth_id_from_users_row(supabase, q["user_id"])
+                if customer_auth_id:
+                    await notify_customer(
+                        supabase=supabase,
+                        customer_auth_id=customer_auth_id,
+                        **quotation_sent(quote_id, q.get("total_amount", 0), q.get("currency", "EGP")),
+                    )
+        except Exception as notif_exc:
+            logger.warning(f"[pipeline] Quotation sent notification skipped: {notif_exc}")
+        # ─────────────────────────────────────────────────────────────────────
+
         return {
             "success": True,
             "quote_id": quote_id,
@@ -502,7 +542,22 @@ async def accept_quotation(
         ).limit(1).execute()
 
         if booking_data.data:
-            return BookingResponse(**booking_data.data[0])
+            bk = booking_data.data[0]
+
+            # ── Portal notification ───────────────────────────────────────────
+            try:
+                customer_auth_id = get_customer_auth_id_from_users_row(supabase, bk["user_id"])
+                if customer_auth_id:
+                    await notify_customer(
+                        supabase=supabase,
+                        customer_auth_id=customer_auth_id,
+                        **booking_confirmed(booking_id, bk.get("booking_reference", booking_id[:8])),
+                    )
+            except Exception as notif_exc:
+                logger.warning(f"[pipeline] Booking confirmed notification skipped: {notif_exc}")
+            # ─────────────────────────────────────────────────────────────────
+
+            return BookingResponse(**bk)
 
         raise Exception("Booking not found after creation")
 
@@ -600,7 +655,28 @@ async def record_payment(
         logger.info(f"✅ Payment recorded for booking: {booking_id}")
 
         # Fetch and return updated payment response
-        return await _fetch_payment_response(transaction_id, booking_id, supabase)
+        result = await _fetch_payment_response(transaction_id, booking_id, supabase)
+
+        # ── Portal notification ───────────────────────────────────────────────
+        try:
+            bk = supabase.table("bookings").select("user_id").eq("id", booking_id).limit(1).execute()
+            if bk.data:
+                customer_auth_id = get_customer_auth_id_from_users_row(supabase, bk.data[0]["user_id"])
+                if customer_auth_id:
+                    await notify_customer(
+                        supabase=supabase,
+                        customer_auth_id=customer_auth_id,
+                        **payment_received(
+                            booking_id,
+                            result.amount_paid,
+                            result.remaining_balance,
+                        ),
+                    )
+        except Exception as notif_exc:
+            logger.warning(f"[pipeline] Payment notification skipped: {notif_exc}")
+        # ─────────────────────────────────────────────────────────────────────
+
+        return result
 
     except HTTPException:
         raise

@@ -27,6 +27,11 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.core.security import AuthToken, require_auth
 from app.services.supabase_client import get_supabase
+from app.services.notification_service import (
+    notify_customer,
+    get_customer_auth_id_from_profile,
+    visa_status_changed,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -408,13 +413,27 @@ async def update_visa_status(
             .eq("created_by", profile_id)
             .execute()
         )
-        
+
         updated = response.data or []
         if not updated:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found.")
-        
+
         logger.info(f"[visa] Status updated {application_id} to {new_status} by {token.user_id}")
-        
+
+        # ── Portal notification ───────────────────────────────────────────────
+        # The visa application's created_by is a profiles.id, so we resolve
+        # profiles.user_id to get the auth.users.id for the customer.
+        created_by = updated[0].get("created_by")
+        if created_by:
+            customer_auth_id = get_customer_auth_id_from_profile(supabase, created_by)
+            if customer_auth_id:
+                await notify_customer(
+                    supabase=supabase,
+                    customer_auth_id=customer_auth_id,
+                    **visa_status_changed(application_id, new_status),
+                )
+        # ─────────────────────────────────────────────────────────────────────
+
         return StatusUpdateResponse(
             success=True,
             application_id=application_id,
@@ -422,7 +441,7 @@ async def update_visa_status(
             status_name=_STATUS_NAMES[new_status],
             message=f"Status updated to: {_STATUS_NAMES[new_status]}",
         )
-        
+
     except HTTPException:
         raise
     except Exception as exc:

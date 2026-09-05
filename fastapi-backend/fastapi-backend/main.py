@@ -30,7 +30,7 @@ if _missing:
     )
 
 # Import routers
-from app.routers import flights, documents, hotels, auth, visa, payments, crm_customers, crm_pipeline
+from app.routers import flights, documents, hotels, auth, visa, payments, crm_customers, crm_pipeline, portal
 
 # Import middleware
 from app.middleware.security import rate_limit_middleware
@@ -83,8 +83,9 @@ app.include_router(hotels.router, prefix="/api/v1/hotels", tags=["Hotels"])
 app.include_router(visa.router,     prefix="/api/v1/visa",     tags=["Visa"])
 app.include_router(payments.router, prefix="/api/v1",           tags=["Payments"])
 app.include_router(auth.router,     prefix="/api/v1/auth",      tags=["Auth"])
-app.include_router(crm_customers.router, prefix="/api/v1/crm",  tags=["CRM Customers"])
-app.include_router(crm_pipeline.router, prefix="/api/v1/pipeline", tags=["CRM Pipeline"])
+app.include_router(crm_customers.router, prefix="/api/v1/crm",      tags=["CRM Customers"])
+app.include_router(crm_pipeline.router,  prefix="/api/v1/pipeline",  tags=["CRM Pipeline"])
+app.include_router(portal.router,        prefix="/api/v1/portal",    tags=["Customer Portal"])
 
 @app.get("/")
 async def root():
