@@ -32,6 +32,7 @@ from app.services.notification_service import (
     get_customer_auth_id_from_profile,
     visa_status_changed,
 )
+from app.services.webhook_sender import send_crm_webhook
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -432,6 +433,16 @@ async def update_visa_status(
                     customer_auth_id=customer_auth_id,
                     **visa_status_changed(application_id, new_status),
                 )
+
+        # ── Website webhook ───────────────────────────────────────────────────
+        # Send HMAC-signed webhook to spanker so travel_requests stays in sync.
+        # tracking_id = visa application id — website links via
+        # travel_requests.linked_visa_application_id when matching.
+        send_crm_webhook(
+            tracking_id=application_id,
+            raw_status=new_status,
+            staff_id=token.user_id,
+        )
         # ─────────────────────────────────────────────────────────────────────
 
         return StatusUpdateResponse(

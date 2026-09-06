@@ -31,6 +31,7 @@ from app.services.notification_service import (
     booking_confirmed,
     payment_received,
 )
+from app.services.webhook_sender import send_crm_webhook
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -356,6 +357,13 @@ async def update_visa_status(
                     )
         except Exception as notif_exc:
             logger.warning(f"[pipeline] Visa notification skipped: {notif_exc}")
+
+        # ── Website webhook ───────────────────────────────────────────────────
+        send_crm_webhook(
+            tracking_id=visa_id,
+            raw_status=new_status,
+            staff_id=context.user_id,
+        )
         # ─────────────────────────────────────────────────────────────────────
 
         return {
@@ -493,6 +501,14 @@ async def send_quotation(
                     )
         except Exception as notif_exc:
             logger.warning(f"[pipeline] Quotation sent notification skipped: {notif_exc}")
+
+        # ── Website webhook ───────────────────────────────────────────────────
+        send_crm_webhook(
+            tracking_id=quote_id,
+            raw_status="documents_review",
+            staff_message="تم إرسال عرض سعر. يرجى المراجعة والقبول.",
+            staff_id=context.user_id,
+        )
         # ─────────────────────────────────────────────────────────────────────
 
         return {
@@ -555,6 +571,14 @@ async def accept_quotation(
                     )
             except Exception as notif_exc:
                 logger.warning(f"[pipeline] Booking confirmed notification skipped: {notif_exc}")
+
+            # ── Website webhook ───────────────────────────────────────────────
+            send_crm_webhook(
+                tracking_id=booking_id,
+                raw_status="completed",
+                staff_message=f"تم تأكيد حجزك برقم {bk.get('booking_reference', booking_id[:8])} ✅",
+                staff_id=context.user_id,
+            )
             # ─────────────────────────────────────────────────────────────────
 
             return BookingResponse(**bk)
@@ -674,6 +698,20 @@ async def record_payment(
                     )
         except Exception as notif_exc:
             logger.warning(f"[pipeline] Payment notification skipped: {notif_exc}")
+
+        # ── Website webhook ───────────────────────────────────────────────────
+        _pay_status = "completed" if result.remaining_balance <= 0 else "in_progress"
+        _pay_msg = (
+            f"تم استلام دفعتك بالكامل ✅"
+            if result.remaining_balance <= 0
+            else f"تم استلام دفعة. المتبقي: {result.remaining_balance:,.0f} EGP"
+        )
+        send_crm_webhook(
+            tracking_id=booking_id,
+            raw_status=_pay_status,
+            staff_message=_pay_msg,
+            staff_id=context.user_id,
+        )
         # ─────────────────────────────────────────────────────────────────────
 
         return result

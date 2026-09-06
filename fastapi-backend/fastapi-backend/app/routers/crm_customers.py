@@ -27,6 +27,7 @@ from app.services.notification_service import (
     booking_status_changed,
     booking_confirmed,
 )
+from app.services.webhook_sender import send_crm_webhook
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -248,6 +249,13 @@ async def update_visa_status(
                     customer_auth_id=customer_auth_id,
                     **visa_status_str_changed(app_id, new_status),
                 )
+
+        # ── Website webhook ───────────────────────────────────────────────────
+        send_crm_webhook(
+            tracking_id=app_id,
+            raw_status=new_status,
+            staff_id=token.user_id,
+        )
         # ─────────────────────────────────────────────────────────────────────
 
         return {"success": True, "application_id": app_id, "new_status": new_status}
@@ -324,6 +332,16 @@ async def update_quotation_status(
                     customer_auth_id=customer_auth_id,
                     **quotation_status_changed(quote_id, new_status),
                 )
+
+        # ── Website webhook ───────────────────────────────────────────────────
+        # Quotation changes are surfaced to the portal via the booking they
+        # eventually create — send with the quotation id as tracking hint.
+        send_crm_webhook(
+            tracking_id=quote_id,
+            raw_status=new_status,
+            staff_message=f"تم تحديث حالة عرض السعر إلى: {new_status}",
+            staff_id=token.user_id,
+        )
         # ─────────────────────────────────────────────────────────────────────
 
         return {"success": True, "quotation_id": quote_id, "new_status": new_status}
@@ -409,6 +427,28 @@ async def update_booking_status(
                         customer_auth_id=customer_auth_id,
                         **booking_status_changed(booking_id, new_status),
                     )
+
+        # ── Website webhook ───────────────────────────────────────────────────
+        _booking_msg = {
+            "CONFIRMED":       "تم تأكيد حجزك ✅",
+            "CANCELLED":       "تم إلغاء الحجز",
+            "COMPLETED":       "اكتمل حجزك بنجاح ✅",
+            "PENDING_PAYMENT": "في انتظار الدفع",
+        }.get(new_status, f"تم تحديث حالة الحجز إلى: {new_status}")
+
+        # Map booking status to nearest PortalStatus for the website
+        _booking_to_portal = {
+            "PENDING_PAYMENT": "in_progress",
+            "CONFIRMED":       "completed",
+            "COMPLETED":       "completed",
+            "CANCELLED":       "cancelled",
+        }
+        send_crm_webhook(
+            tracking_id=booking_id,
+            raw_status=_booking_to_portal.get(new_status, "in_progress"),
+            staff_message=_booking_msg,
+            staff_id=token.user_id,
+        )
         # ─────────────────────────────────────────────────────────────────────
 
         return {"success": True, "booking_id": booking_id, "new_status": new_status}
