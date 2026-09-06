@@ -1,4 +1,4 @@
-"""
+﻿"""
 FastAPI Travel Agency CRM Backend
 Main application entry point
 """
@@ -39,11 +39,11 @@ from app.middleware.security import rate_limit_middleware
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown events"""
-    print("🚀 FastAPI Travel Agency Backend Starting...")
-    print(f"✅ Environment: {os.getenv('ENVIRONMENT', 'unknown')}")
-    print("✅ All required secrets loaded from environment.")
+    print("ðŸš€ FastAPI Travel Agency Backend Starting...")
+    print(f"âœ… Environment: {os.getenv('ENVIRONMENT', 'unknown')}")
+    print("âœ… All required secrets loaded from environment.")
     yield
-    print("🛑 FastAPI Travel Agency Backend Shutting Down...")
+    print("ðŸ›‘ FastAPI Travel Agency Backend Shutting Down...")
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -61,7 +61,7 @@ cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:4000,http://localhost
 # Clean up whitespace from environment variable
 cors_origins = [origin.strip() for origin in cors_origins if origin.strip()]
 
-print(f"🔐 CORS Allowed Origins: {cors_origins}")
+print(f"ðŸ” CORS Allowed Origins: {cors_origins}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -87,6 +87,20 @@ app.include_router(crm_customers.router, prefix="/api/v1/crm",      tags=["CRM C
 app.include_router(crm_pipeline.router,  prefix="/api/v1/pipeline",  tags=["CRM Pipeline"])
 app.include_router(portal.router,        prefix="/api/v1/portal",    tags=["Customer Portal"])
 
+
+import logging, traceback
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+logging.basicConfig(level=logging.DEBUG)
+_logger = logging.getLogger("portal")
+
+@app.exception_handler(Exception)
+async def _global_exc(request: Request, exc: Exception):
+    _logger.error(f"500 on {request.method} {request.url.path}")
+    _logger.error(f"{type(exc).__name__}: {exc}")
+    _logger.error(traceback.format_exc())
+    return JSONResponse(status_code=500, content={"detail": str(exc), "type": type(exc).__name__})
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -109,3 +123,4 @@ if __name__ == "__main__":
         port=int(os.getenv("API_PORT", 8000)),
         reload=os.getenv("ENVIRONMENT") == "development"
     )
+

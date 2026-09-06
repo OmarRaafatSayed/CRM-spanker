@@ -1,4 +1,4 @@
-"""
+﻿"""
 Security Middleware
 JWT validation, rate limiting, and API key authentication
 """
@@ -119,20 +119,51 @@ async def rate_limit_middleware(request: Request, call_next):
     Rate limiting middleware
     Limits requests per IP address to prevent abuse
     """
-    # Skip rate limiting for health checks
-    if request.url.path in ["/health", "/", "/docs", "/redoc"]:
-        return await call_next(request)
+    import logging
+    import traceback
+    from fastapi.responses import JSONResponse
     
-    client_ip = get_client_ip(request)
+    logger = logging.getLogger("rate_limit_middleware")
     
-    if not check_rate_limit(client_ip):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded. Max {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW} seconds."
+    try:
+        # Skip rate limiting for health checks
+        if request.url.path in ["/health", "/", "/docs", "/redoc"]:
+            return await call_next(request)
+        
+        client_ip = get_client_ip(request)
+        
+        if not check_rate_limit(client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Rate limit exceeded. Max {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW} seconds."
+            )
+        
+        response = await call_next(request)
+        return response
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like 429) - they're intentional
+        raise
+    
+    except Exception as e:
+        # Log unexpected errors
+        logger.error(f"❌ CRITICAL: rate_limit_middleware failed!")
+        logger.error(f"Request: {request.method} {request.url.path}")
+        logger.error(f"Client IP: {get_client_ip(request)}")
+        logger.error(f"Error Type: {type(e).__name__}")
+        logger.error(f"Error Message: {str(e)}")
+        logger.error(f"Traceback:\n{traceback.format_exc()}")
+        
+        # Return detailed error response
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Internal Server Error in rate_limit_middleware",
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "path": request.url.path
+            }
         )
-    
-    response = await call_next(request)
-    return response
 
 def generate_api_key() -> str:
     """
@@ -174,3 +205,4 @@ async def api_key_auth(request: Request):
             detail="Invalid or missing API key",
             headers={"WWW-Authenticate": "ApiKey"},
         )
+
